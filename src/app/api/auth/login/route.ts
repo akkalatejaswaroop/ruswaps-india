@@ -1,0 +1,95 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { generateAccessToken, generateRefreshToken, comparePassword, cookieOptions, refreshCookieOptions } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { phone, password } = body;
+
+    if (!phone || !password) {
+      return NextResponse.json(
+        { success: false, message: 'Phone and password are required' },
+        { status: 400 }
+      );
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { phone },
+      select: {
+        id: true,
+        phone: true,
+        email: true,
+        name: true,
+        password: true,
+        isSubscribed: true,
+        subscriptionExpiry: true,
+        isActive: true,
+      },
+    });
+
+    if (!user || !user.isActive) {
+      return NextResponse.json(
+        { success: false, message: 'Invalid credentials' },
+        { status: 401 }
+      );
+    }
+
+    const isValid = await comparePassword(password, user.password);
+
+    if (!isValid) {
+      return NextResponse.json(
+        { success: false, message: 'Invalid credentials' },
+        { status: 401 }
+      );
+    }
+
+    const isSubscribed = user.subscriptionExpiry && new Date(user.subscriptionExpiry) > new Date();
+    let statusCode = 200;
+    if (!isSubscribed && user.subscriptionExpiry) {
+      statusCode = 400;
+    } else if (!isSubscribed) {
+      statusCode = 300;
+    }
+
+    const accessToken = generateAccessToken({
+      userId: user.id,
+      phone: user.phone,
+      email: user.email || undefined,
+    });
+
+    const refreshToken = generateRefreshToken({
+      userId: user.id,
+      type: 'refresh',
+    });
+
+    const response = NextResponse.json({
+      success: true,
+      statusCode,
+      data: {
+        user: {
+          id: user.id,
+          phone: user.phone,
+          email: user.email,
+          name: user.name,
+          isSubscribed,
+          subscriptionExpiry: user.subscriptionExpiry,
+        },
+        accessToken,
+      },
+      message: 'Login successful',
+    });
+
+    response.cookies.set('accessToken', accessToken, cookieOptions);
+    response.cookies.set('refreshToken', refreshToken, refreshCookieOptions);
+
+    return response;
+
+  } catch (error) {
+    console.error('Login error:', error);
+    return NextResponse.json(
+      { success: false, message: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}

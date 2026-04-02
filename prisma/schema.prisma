@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String         @id @default(cuid())
+  phone            String         @unique
+  email            String?        @unique
+  name             String
+  password         String
+  playerId         String?
+  isActive         Boolean        @default(true)
+  isSubscribed     Boolean        @default(false)
+  subscriptionExpiry DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  
+  subscriptions    Subscription[]
+  cases            Case[]
+  calculations     Calculation[]
+  notifications    Notification[]
+  
+  @@map("users")
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      String
+  plan        String   // monthly or annual
+  amount      Decimal  @db.Decimal(10, 2)
+  paymentId   String?
+  orderId     String?
+  status      String   @default("pending") // pending, completed, failed
+  startDate   DateTime
+  endDate     DateTime
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id])
+  
+  @@map("subscriptions")
+}
+
+model Case {
+  id          String   @id @default(cuid())
+  userId      String
+  caseNo      String
+  caseYear    Int
+  caseType    String
+  courtName   String?
+  hearingDate DateTime?
+  postedFor   String?
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User     @relation(fields: [userId], references: [id])
+  
+  @@map("cases")
+}
+
+model Calculation {
+  id         String   @id @default(cuid())
+  userId     String
+  type       String   // mva, ec, disability, income-tax, hit-run
+  inputData  Json
+  resultData Json
+  createdAt  DateTime @default(now())
+  
+  user       User     @relation(fields: [userId], references: [id])
+  
+  @@map("calculations")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("info")
+  isRead    Boolean  @default(false)
+  data      Json?
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id])
+  
+  @@map("notifications")
+}
+
+model PageView {
+  id        String @id @default(cuid())
+  pageName  String @unique
+  pageCount Int    @default(0)
+  
+  @@map("page_views")
+}
+
+model AppVersion {
+  id              String   @id @default(cuid())
+  version         String
+  minVersion      String?
+  forceUpdate     Boolean  @default(false)
+  playstoreUrl    String?
+  paymentKey      String?
+  paymentPrice    Decimal  @db.Decimal(10, 2)
+  paymentImg      String?
+  paymentAllowDays Int     @default(30)
+  deathCount      Int      @default(200000)
+  injuriesCount   Int      @default(50000)
+  updatedAt       DateTime @updatedAt
+  
+  @@map("app_version")
+}
+
+model Banner {
+  id        String   @id @default(cuid())
+  title     String?
+  image     String?
+  link      String?
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  
+  @@map("banners")
+}
+
+model LatestNews {
+  id        String   @id @default(cuid())
+  news      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  
+  @@map("latest_news")
+}
+
+model Mailer {
+  id        String   @id @default(cuid())
+  email     String
+  sentAt    DateTime @default(now())
+  
+  @@map("mailers")
+}
+
+model PageRegistration {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String
+  createdAt DateTime @default(now())
+  
+  @@map("page_registrations")
+}
+
+model LegalDictionary {
+  id         String   @id @default(cuid())
+  term       String
+  definition String
+  category   String?
+  
+  @@map("legal_dictionary")
+}
+
+model WsDocument {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  fileUrl     String
+  category    String?
+  
+  @@map("ws_documents")
+}

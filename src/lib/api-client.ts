@@ -1,0 +1,40 @@
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+
+export async function saveCalculation(type: string, data: unknown) {
+  if (typeof window === 'undefined') return;
+  
+  const token = localStorage.getItem('accessToken');
+  if (!token) return;
+
+  try {
+    await fetch(`${API_URL}/api/calculations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ type, data }),
+    });
+  } catch (err) {
+    console.error('Failed to save calculation:', err);
+  }
+}
+
+export async function fetchUserProfile() {
+  if (typeof window === 'undefined') return null;
+  
+  const token = localStorage.getItem('accessToken');
+  if (!token) return null;
+
+  try {
+    const response = await fetch(`${API_URL}/api/user/profile`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const data = await response.json();
+    return data.success ? data.data : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+export { API_URL };
