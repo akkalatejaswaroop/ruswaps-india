@@ -35,5 +35,3 @@ export async function fetchUserProfile() {
     return null;
   }
 }
-
-export { API_URL };
