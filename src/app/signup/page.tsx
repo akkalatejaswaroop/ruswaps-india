@@ -109,6 +109,7 @@ export default function Signup() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: formData.phone,
+          email: formData.email,
           otp: enteredOtp,
           name: formData.name,
           password: formData.password

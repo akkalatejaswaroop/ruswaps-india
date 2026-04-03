@@ -26,7 +26,9 @@ function checkRateLimit(identifier: string): boolean {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, phone, email, password } = body;
+    let { name, phone, email, password } = body;
+    if (email) email = email.trim().toLowerCase();
+    if (phone) phone = phone.trim();
     const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown';
 
     if (!name || !phone || !email || !password) {
@@ -143,17 +145,25 @@ export async function PUT(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { phone, otp, name, password } = body;
+    let { phone, email, otp, name, password } = body;
+    if (email) email = email.trim().toLowerCase();
+    if (phone) phone = phone.trim();
 
-    if (!phone || !otp || !name || !password) {
+    if ((!phone && !email) || !otp || !name || !password) {
       return NextResponse.json(
-        { success: false, message: 'Phone and OTP are required' },
+        { success: false, message: 'Phone/Email and OTP are required' },
         { status: 400 }
       );
     }
 
-    const otpRecord = await prisma.otp.findUnique({
-      where: { phone_purpose: { phone, purpose: 'register' } },
+    const otpRecord = await prisma.otp.findFirst({
+      where: {
+        AND: [
+          phone ? { phone } : {},
+          email ? { email } : {},
+          { purpose: 'register' }
+        ]
+      },
     });
 
     if (!otpRecord) {

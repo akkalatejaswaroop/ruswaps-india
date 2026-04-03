@@ -7,7 +7,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { phone, email, identifier, password } = body;
-    const loginIdentifier = identifier || phone || email;
+    const rawIdentifier = identifier || phone || email;
+    const loginIdentifier = rawIdentifier ? rawIdentifier.trim() : '';
 
     if (!loginIdentifier || !password) {
       return NextResponse.json(
@@ -17,9 +18,10 @@ export async function POST(request: NextRequest) {
     }
 
     const isEmail = loginIdentifier.includes('@');
+    const queryIdentifier = isEmail ? loginIdentifier.toLowerCase() : loginIdentifier;
 
     const user = await prisma.user.findFirst({
-      where: isEmail ? { email: loginIdentifier } : { phone: loginIdentifier },
+      where: isEmail ? { email: queryIdentifier } : { phone: queryIdentifier },
       select: {
         id: true,
         phone: true,

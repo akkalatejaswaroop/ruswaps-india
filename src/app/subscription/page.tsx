@@ -322,7 +322,7 @@ export default function Subscription() {
               >
                 {processing && key !== 'free' 
                   ? 'Processing...' 
-                  : user?.isSubscribed 
+                  : (user?.subscriptionPlan ? user.subscriptionPlan === key : user?.isSubscribed)
                     ? 'Current Plan' 
                     : selectedPlan === key 
                       ? (key === 'free' ? 'Continue with Free Tier' : 'Subscribe Now') 
