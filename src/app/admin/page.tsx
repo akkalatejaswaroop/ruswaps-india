@@ -197,8 +197,8 @@ export default function AdminPanel() {
           <div className="flex justify-between h-16">
             <div className="flex items-center gap-2">
               <Link href="/dashboard" className="flex items-center gap-2">
-                <Image src="/logo.png" alt="Ruswaps" width={40} height={40} className="w-10 h-10 object-contain" />
-                <Image src="/main_logo.jpg" alt="Ruswaps" width={36} height={36} className="hidden lg:block h-9 object-contain" />
+                <Image src="/logo.png" alt="Ruswaps" width={64} height={64} className="w-16 h-16 object-contain" />
+                <Image src="/main_logo.jpg" alt="Ruswaps" width={200} height={56} className="hidden lg:block h-14 w-auto object-contain" />
               </Link>
             </div>
             <div className="flex items-center gap-2">

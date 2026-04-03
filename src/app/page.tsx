@@ -44,7 +44,7 @@ export default function Home() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <Link href="/" className="flex items-center gap-3">
-                <Image src="/main_logo.jpg" alt="Ruswaps" width={48} height={48} className="h-12 object-contain" />
+                <Image src="/main_logo.jpg" alt="Ruswaps" width={200} height={80} className="h-20 w-auto object-contain" />
               </Link>
             </div>
 
@@ -590,7 +590,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="flex items-center gap-3">
-              <Image src="/logo.png" alt="Ruswaps" width={40} height={40} className="w-10 h-10 object-contain" />
+              <Image src="/logo.png" alt="Ruswaps" width={64} height={64} className="w-16 h-16 object-contain" />
             </div>
             <div className="flex gap-6 text-gray-400">
               <Link href="/privacy" className="hover:text-white transition">Privacy Policy</Link>

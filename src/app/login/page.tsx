@@ -61,8 +61,7 @@ export default function Login() {
             <ArrowLeft size={20} className="mr-2" /> Back to Home
           </Link>
           <div className="flex items-center justify-center gap-2 mb-4">
-            <Image src="/logo.png" alt="Ruswaps" width={48} height={48} className="w-12 h-12 object-contain" />
-            <Image src="/main_logo.jpg" alt="Ruswaps" width={40} height={40} className="hidden sm:block h-10 object-contain" />
+            <Image src="/logo.png" alt="Ruswaps" width={96} height={96} className="w-24 h-24 object-contain" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Welcome Back</h1>
           <p className="text-gray-500 mt-2">Sign in to access your dashboard</p>
