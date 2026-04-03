@@ -23,18 +23,6 @@ function checkRateLimit(identifier: string): boolean {
   return true;
 }
 
-async function cleanupExpiredOtps() {
-  try {
-    await prisma.otp.deleteMany({
-      where: { expires: { lt: new Date() } },
-    });
-  } catch (error) {
-    console.error('OTP cleanup error:', error);
-  }
-}
-
-setInterval(cleanupExpiredOtps, 5 * 60 * 1000);
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();

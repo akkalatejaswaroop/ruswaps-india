@@ -69,17 +69,17 @@ Set these in Netlify Dashboard > Site Settings > Environment Variables:
 
 ### Required for Production:
 ```
-DATABASE_URL=postgresql://user:pass@host:5432/ruswaps
-JWT_SECRET=your-production-jwt-secret
-RAZORPAY_KEY_ID=your_razorpay_key_id
-RAZORPAY_KEY_SECRET=your_razorpay_key_secret
-ONESIGNAL_APP_ID=your_onesignal_app_id
-ONESIGNAL_API_KEY=your_onesignal_api_key
-SMTP_HOST=smtp.gmail.com
+DATABASE_URL=<your_postgresql_connection_string>
+JWT_SECRET=<generate_a_secure_random_string>
+RAZORPAY_KEY_ID=<your_razorpay_key_id>
+RAZORPAY_KEY_SECRET=<your_razorpay_key_secret>
+ONESIGNAL_APP_ID=<your_onesignal_app_id>
+ONESIGNAL_API_KEY=<your_onesignal_api_key>
+SMTP_HOST=<your_smtp_host>
 SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
-SMTP_FROM=Ruswaps <your_email@gmail.com>
+SMTP_USER=<your_smtp_user>
+SMTP_PASS=<your_smtp_password>
+SMTP_FROM=Ruswaps <noreply@example.com>
 NODE_ENV=production
 ```
 
