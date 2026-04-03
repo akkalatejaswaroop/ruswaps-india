@@ -21,7 +21,9 @@ export async function POST(request: NextRequest) {
     const queryIdentifier = isEmail ? loginIdentifier.toLowerCase() : loginIdentifier;
 
     const user = await prisma.user.findFirst({
-      where: isEmail ? { email: queryIdentifier } : { phone: queryIdentifier },
+      where: isEmail 
+        ? { email: { equals: queryIdentifier, mode: 'insensitive' } } 
+        : { phone: queryIdentifier },
       select: {
         id: true,
         phone: true,
