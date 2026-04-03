@@ -3,7 +3,7 @@
   publish = ".next"
 
 [build.secrets]
-  SECRETS_SCAN_OMIT_PATHS = [".env.example", "DEPLOYMENT.md"]
+  SECRETS_SCAN_OMIT_KEYS = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "ONESIGNAL_API_KEY", "ONESIGNAL_APP_ID", "DATABASE_URL", "JWT_SECRET"]
 
 [build.environment]
   NODE_VERSION = "20"
