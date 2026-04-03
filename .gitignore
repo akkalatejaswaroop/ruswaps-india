@@ -54,3 +54,4 @@ public/uploads/
 # Temporary files
 tmp/
 temp/
+.aider*
