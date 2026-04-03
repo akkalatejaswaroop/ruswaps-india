@@ -23,11 +23,11 @@ import {
 } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY || 'ruswaps-admin-secret-key';
 
 export default function AdminPanel() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [activeTab, setActiveTab] = useState('stats');
   const [stats, setStats] = useState(null);
   const [users, setUsers] = useState([]);
@@ -42,17 +42,43 @@ export default function AdminPanel() {
   const [broadcastForm, setBroadcastForm] = useState({ title: '', message: '' });
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    fetchData();
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+    
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      if (payload.role !== 'ADMIN') {
+        setError('Unauthorized: Admin access required');
+        setLoading(false);
+        return;
+      }
+      setIsAdmin(true);
+      fetchData();
+    } catch {
+      setError('Invalid token');
+      setLoading(false);
+    }
   }, [activeTab, page]);
 
   const fetchData = async () => {
     setLoading(true);
+    setError('');
     try {
       const url = `${API_URL}/api/admin/users?type=${activeTab}&page=${page}`;
-      const res = await fetch(url, { headers: { 'x-admin-key': ADMIN_KEY } });
+      const res = await fetch(url, { credentials: 'include' });
       const data = await res.json();
+      
+      if (!res.ok || !data.success) {
+        setError(data.message || 'Failed to fetch data');
+        setLoading(false);
+        return;
+      }
       
       if (data.success) {
         if (activeTab === 'stats') setStats(data.data);
@@ -64,6 +90,7 @@ export default function AdminPanel() {
       }
     } catch (err) {
       console.error('Failed to fetch data:', err);
+      setError('Failed to fetch data');
     }
     setLoading(false);
   };
@@ -71,7 +98,7 @@ export default function AdminPanel() {
   const fetchUserDetail = async (userId) => {
     try {
       const res = await fetch(`${API_URL}/api/admin/users?type=user-detail&userId=${userId}`, {
-        headers: { 'x-admin-key': ADMIN_KEY },
+        credentials: 'include',
       });
       const data = await res.json();
       if (data.success) setSelectedUser(data.data);
@@ -84,11 +111,9 @@ export default function AdminPanel() {
     try {
       const res = await fetch(`${API_URL}/api/admin/actions`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-key': ADMIN_KEY,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, action }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (data.success) fetchData();
@@ -101,11 +126,9 @@ export default function AdminPanel() {
     try {
       const res = await fetch(`${API_URL}/api/admin/users`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-key': ADMIN_KEY,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'broadcast', ...broadcastForm }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (data.success) {
@@ -117,6 +140,26 @@ export default function AdminPanel() {
       console.error('Broadcast failed:', err);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  if (error || !isAdmin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Access Denied</h1>
+          <p className="text-gray-600">{error || 'You do not have admin access'}</p>
+          <Link href="/dashboard" className="mt-4 inline-block text-primary hover:underline">Go to Dashboard</Link>
+        </div>
+      </div>
+    );
+  }
 
   const exportToCSV = (data, filename) => {
     if (!data.length) return;

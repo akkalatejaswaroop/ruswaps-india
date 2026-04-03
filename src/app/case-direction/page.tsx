@@ -16,13 +16,20 @@ import {
   Trash2,
   ChevronRight,
   Search,
-  Filter
+  Filter,
+  Loader2
 } from 'lucide-react';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function CaseDirection() {
   const router = useRouter();
   const [cases, setCases] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingCase, setEditingCase] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -37,8 +44,8 @@ export default function CaseDirection() {
   });
 
   useEffect(() => {
-    const loggedIn = localStorage.getItem('isLoggedIn');
-    if (!loggedIn) {
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
       router.push('/login');
     } else {
       setIsLoggedIn(true);
@@ -46,87 +53,129 @@ export default function CaseDirection() {
     }
   }, [router]);
 
-  const loadCases = () => {
-    const savedCases = localStorage.getItem('ruswaps_cases');
-    if (savedCases) {
-      setCases(JSON.parse(savedCases));
-    } else {
-      // Demo data
-      const demoCases = [
-        {
-          id: '1',
-          caseNo: 'MVA 1234/2024',
-          caseYear: 2024,
-          caseType: 'Motor Vehicle Accident - Death Claim',
-          courtName: 'City Civil Court, Tenali',
-          hearingDate: '2024-01-20',
-          postedFor: 'Evidence Recording',
-          status: 'next_hearing',
-          nextHearing: '2024-01-25'
-        },
-        {
-          id: '2',
-          caseNo: 'EC 567/2024',
-          caseYear: 2024,
-          caseType: 'Employee Compensation - Injury',
-          courtName: 'Labour Court, Guntur',
-          hearingDate: '2024-01-15',
-          postedFor: 'Final Arguments',
+  const loadCases = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_URL}/api/cases`, {
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCases(data.data);
+      }
+    } catch (err) {
+      console.error('Failed to load cases:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddCase = async () => {
+    try {
+      setSaving(true);
+      const res = await fetch(`${API_URL}/api/cases`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCase),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCases([data.data, ...cases]);
+        setShowAddModal(false);
+        setNewCase({
+          caseNo: '',
+          caseYear: new Date().getFullYear(),
+          caseType: 'Motor Vehicle Accident',
+          courtName: '',
+          hearingDate: '',
+          postedFor: '',
           status: 'pending'
-        }
-      ];
-      setCases(demoCases);
-      localStorage.setItem('ruswaps_cases', JSON.stringify(demoCases));
+        });
+      }
+    } catch (err) {
+      console.error('Failed to add case:', err);
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleAddCase = () => {
-    const caseData = {
-      ...newCase,
-      id: Date.now().toString()
-    };
-    const updatedCases = [...cases, caseData];
-    setCases(updatedCases);
-    localStorage.setItem('ruswaps_cases', JSON.stringify(updatedCases));
-    setShowAddModal(false);
-    setNewCase({
-      caseNo: '',
-      caseYear: new Date().getFullYear(),
-      caseType: 'Motor Vehicle Accident',
-      courtName: '',
-      hearingDate: '',
-      postedFor: '',
-      status: 'pending'
+  const handleEditCase = async () => {
+    if (!editingCase) return;
+    try {
+      setSaving(true);
+      const res = await fetch(`${API_URL}/api/cases`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseId: editingCase.id,
+          caseNo: editingCase.caseNo,
+          caseYear: editingCase.caseYear,
+          caseType: editingCase.caseType,
+          courtName: editingCase.courtName,
+          hearingDate: editingCase.hearingDate,
+          postedFor: editingCase.postedFor,
+          status: editingCase.status,
+        }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCases(cases.map(c => c.id === editingCase.id ? data.data : c));
+        setShowEditModal(false);
+        setEditingCase(null);
+      }
+    } catch (err) {
+      console.error('Failed to update case:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteCase = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this case?')) return;
+    try {
+      const res = await fetch(`${API_URL}/api/cases?caseId=${id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCases(cases.filter(c => c.id !== id));
+      }
+    } catch (err) {
+      console.error('Failed to delete case:', err);
+    }
+  };
+
+  const openEditModal = (c: any) => {
+    setEditingCase({
+      ...c,
+      hearingDate: c.hearingDate ? new Date(c.hearingDate).toISOString().split('T')[0] : ''
     });
+    setShowEditModal(true);
   };
 
-  const handleDeleteCase = (id) => {
-    if (confirm('Are you sure you want to delete this case?')) {
-      const updatedCases = cases.filter(c => c.id !== id);
-      setCases(updatedCases);
-      localStorage.setItem('ruswaps_cases', JSON.stringify(updatedCases));
-    }
-  };
-
-  const getStatusBadge = (status) => {
-    const badges = {
+  const getStatusBadge = (status: string) => {
+    const badges: Record<string, string> = {
       pending: 'bg-yellow-100 text-yellow-700',
       next_hearing: 'bg-green-100 text-green-700',
       disposed: 'bg-gray-100 text-gray-700'
     };
-    const labels = {
+    const labels: Record<string, string> = {
       pending: 'Pending',
       next_hearing: 'Next Hearing',
       disposed: 'Disposed'
     };
     return (
-      <span className={`px-3 py-1 rounded-full text-xs font-medium ${badges[status]}`}>
-        {labels[status]}
+      <span className={`px-3 py-1 rounded-full text-xs font-medium ${badges[status] || badges.pending}`}>
+        {labels[status] || labels.pending}
       </span>
     );
   };
 
-  const getDaysUntilHearing = (date) => {
+  const getDaysUntilHearing = (date: string) => {
+    if (!date) return '';
     const today = new Date();
     const hearing = new Date(date);
     const diff = Math.ceil((hearing.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
@@ -138,23 +187,19 @@ export default function CaseDirection() {
 
   const generatePDF = () => {
     const doc = new jsPDF();
-    
     doc.setFontSize(18);
     doc.setFont('helvetica', 'bold');
     doc.text('CASE DIRECTORY REPORT', 105, 20, { align: 'center' });
-    
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.text(`Generated: ${new Date().toLocaleDateString()}`, 200, 30, { align: 'right' });
-    
     const tableData = cases.map(c => [
       c.caseNo,
-      c.caseType.substring(0, 20) + '...',
-      c.courtName.substring(0, 20) + '...',
-      c.hearingDate,
-      c.status.replace('_', ' ').toUpperCase()
+      c.caseType?.substring(0, 20) || '',
+      c.courtName?.substring(0, 20) || '',
+      c.hearingDate ? new Date(c.hearingDate).toLocaleDateString() : '-',
+      c.status?.replace('_', ' ').toUpperCase() || ''
     ]);
-    
     autoTable(doc, {
       startY: 40,
       head: [['Case No', 'Type', 'Court', 'Hearing Date', 'Status']],
@@ -162,14 +207,14 @@ export default function CaseDirection() {
       theme: 'grid',
       headStyles: { fillColor: [1, 124, 67] }
     });
-    
     doc.save('Case_Directory_Report.pdf');
   };
 
   const filteredCases = cases.filter(c => {
-    const matchesSearch = c.caseNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         c.caseType.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         c.courtName.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = !searchTerm || 
+      c.caseNo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.caseType?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.courtName?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesFilter = filterStatus === 'all' || c.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
@@ -203,7 +248,6 @@ export default function CaseDirection() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {/* Search and Filter */}
         <div className="flex flex-col sm:flex-row gap-4 mb-6">
           <div className="flex-1 relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
@@ -223,7 +267,6 @@ export default function CaseDirection() {
           </div>
         </div>
 
-        {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
             <p className="text-sm text-gray-500">Total Cases</p>
@@ -243,65 +286,65 @@ export default function CaseDirection() {
           </div>
         </div>
 
-        {/* Cases List */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {filteredCases.length === 0 ? (
-            <div className="p-12 text-center">
-              <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No cases found</h3>
-              <p className="text-gray-500 mb-4">Add your first case to get started</p>
-              <button onClick={() => setShowAddModal(true)} className="px-6 py-2 bg-primary text-white rounded-lg">
-                Add Case
-              </button>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-100">
-              {filteredCases.map((c) => (
-                <div key={c.id} className="p-6 hover:bg-gray-50 transition">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold text-gray-900">{c.caseNo}</h3>
-                        {getStatusBadge(c.status)}
-                        {c.hearingDate && (
-                          <span className="flex items-center gap-1 text-sm text-gray-500">
-                            <Bell size={14} />
-                            {getDaysUntilHearing(c.hearingDate)}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-gray-600 mb-1">{c.caseType}</p>
-                      <div className="flex flex-wrap gap-4 text-sm text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <MapPin size={14} /> {c.courtName}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="animate-spin text-primary" size={32} />
+          </div>
+        ) : filteredCases.length === 0 ? (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
+            <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">No cases found</h3>
+            <p className="text-gray-500 mb-4">Add your first case to get started</p>
+            <button onClick={() => setShowAddModal(true)} className="px-6 py-2 bg-primary text-white rounded-lg">
+              Add Case
+            </button>
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden divide-y divide-gray-100">
+            {filteredCases.map((c) => (
+              <div key={c.id} className="p-6 hover:bg-gray-50 transition">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h3 className="font-semibold text-gray-900">{c.caseNo}</h3>
+                      {getStatusBadge(c.status)}
+                      {c.hearingDate && (
+                        <span className="flex items-center gap-1 text-sm text-gray-500">
+                          <Bell size={14} />
+                          {getDaysUntilHearing(c.hearingDate)}
                         </span>
-                        {c.hearingDate && (
-                          <span className="flex items-center gap-1">
-                            <Calendar size={14} /> {c.hearingDate}
-                          </span>
-                        )}
-                        {c.postedFor && (
-                          <span>Posted for: {c.postedFor}</span>
-                        )}
-                      </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button className="p-2 text-gray-400 hover:text-primary">
-                        <Edit2 size={18} />
-                      </button>
-                      <button onClick={() => handleDeleteCase(c.id)} className="p-2 text-gray-400 hover:text-red-500">
-                        <Trash2 size={18} />
-                      </button>
+                    <p className="text-sm text-gray-600 mb-1">{c.caseType}</p>
+                    <div className="flex flex-wrap gap-4 text-sm text-gray-500">
+                      <span className="flex items-center gap-1">
+                        <MapPin size={14} /> {c.courtName || '-'}
+                      </span>
+                      {c.hearingDate && (
+                        <span className="flex items-center gap-1">
+                          <Calendar size={14} /> {new Date(c.hearingDate).toLocaleDateString()}
+                        </span>
+                      )}
+                      {c.postedFor && (
+                        <span>Posted for: {c.postedFor}</span>
+                      )}
                     </div>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => openEditModal(c)} className="p-2 text-gray-400 hover:text-primary">
+                      <Edit2 size={18} />
+                    </button>
+                    <button onClick={() => handleDeleteCase(c.id)} className="p-2 text-gray-400 hover:text-red-500">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
 
-      {/* Add Case Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto">
@@ -359,8 +402,74 @@ export default function CaseDirection() {
               </div>
             </div>
             <div className="flex gap-3 mt-6">
-              <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 border border-gray-300 rounded-lg">Cancel</button>
-              <button onClick={handleAddCase} className="flex-1 py-3 bg-primary text-white rounded-lg">Add Case</button>
+              <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 border border-gray-300 rounded-lg" disabled={saving}>Cancel</button>
+              <button onClick={handleAddCase} disabled={saving || !newCase.caseNo} className="flex-1 py-3 bg-primary text-white rounded-lg disabled:opacity-50 flex items-center justify-center">
+                {saving ? <Loader2 className="animate-spin" size={20} /> : 'Add Case'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEditModal && editingCase && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold text-gray-900 mb-6">Edit Case</h2>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Case Number</label>
+                  <input type="text" value={editingCase.caseNo} onChange={(e) => setEditingCase({...editingCase, caseNo: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+                  <input type="number" value={editingCase.caseYear} onChange={(e) => setEditingCase({...editingCase, caseYear: parseInt(e.target.value)})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Case Type</label>
+                <select value={editingCase.caseType} onChange={(e) => setEditingCase({...editingCase, caseType: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
+                  <option>Motor Vehicle Accident - Death Claim</option>
+                  <option>Motor Vehicle Accident - Injury Claim</option>
+                  <option>Employee Compensation - Death</option>
+                  <option>Employee Compensation - Injury</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Court Name</label>
+                <input type="text" value={editingCase.courtName || ''} onChange={(e) => setEditingCase({...editingCase, courtName: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Hearing Date</label>
+                  <input type="date" value={editingCase.hearingDate || ''} onChange={(e) => setEditingCase({...editingCase, hearingDate: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <select value={editingCase.status} onChange={(e) => setEditingCase({...editingCase, status: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
+                    <option value="pending">Pending</option>
+                    <option value="next_hearing">Next Hearing</option>
+                    <option value="disposed">Disposed</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Posted For</label>
+                <input type="text" value={editingCase.postedFor || ''} onChange={(e) => setEditingCase({...editingCase, postedFor: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => { setShowEditModal(false); setEditingCase(null); }} className="flex-1 py-3 border border-gray-300 rounded-lg" disabled={saving}>Cancel</button>
+              <button onClick={handleEditCase} disabled={saving} className="flex-1 py-3 bg-primary text-white rounded-lg disabled:opacity-50 flex items-center justify-center">
+                {saving ? <Loader2 className="animate-spin" size={20} /> : 'Save Changes'}
+              </button>
             </div>
           </div>
         </div>

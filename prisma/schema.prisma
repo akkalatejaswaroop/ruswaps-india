@@ -13,6 +13,7 @@ model User {
   email            String?        @unique
   name             String
   password         String
+  role             String         @default("USER")
   playerId         String?
   isActive         Boolean        @default(true)
   isSubscribed     Boolean        @default(false)
@@ -24,6 +25,7 @@ model User {
   cases            Case[]
   calculations     Calculation[]
   notifications    Notification[]
+  otps             Otp[]
   
   @@map("users")
 }
@@ -142,6 +144,23 @@ model Mailer {
   sentAt    DateTime @default(now())
   
   @@map("mailers")
+}
+
+model Otp {
+  id        String   @id @default(cuid())
+  phone     String
+  email    String
+  otp      String
+  expires  DateTime
+  userId   String?
+  purpose  String   @default("register")
+  attempts Int      @default(0)
+  createdAt DateTime @default(now())
+  
+  user     User?    @relation(fields: [userId], references: [id])
+  
+  @@unique([phone, purpose])
+  @@map("otps")
 }
 
 model PageRegistration {

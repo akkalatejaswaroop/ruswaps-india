@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generateAccessToken, generateRefreshToken, comparePassword, cookieOptions, refreshCookieOptions } from '@/lib/auth';
+import { generateAccessToken, generateRefreshToken, cookieOptions, refreshCookieOptions } from '@/lib/auth';
+import { comparePassword } from '@/lib/auth-server';
 import { prisma } from '@/lib/prisma';
 
 export async function POST(request: NextRequest) {
@@ -49,23 +50,22 @@ export async function POST(request: NextRequest) {
     if (!isSubscribed && user.subscriptionExpiry) {
       statusCode = 400;
     } else if (!isSubscribed) {
-      statusCode = 300;
+      statusCode = 403;
     }
 
-    const accessToken = generateAccessToken({
+    const accessToken = await generateAccessToken({
       userId: user.id,
       phone: user.phone,
       email: user.email || undefined,
     });
 
-    const refreshToken = generateRefreshToken({
+    const refreshToken = await generateRefreshToken({
       userId: user.id,
       type: 'refresh',
     });
 
     const response = NextResponse.json({
       success: true,
-      statusCode,
       data: {
         user: {
           id: user.id,
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
         accessToken,
       },
       message: 'Login successful',
-    });
+    }, { status: statusCode });
 
     response.cookies.set('accessToken', accessToken, cookieOptions);
     response.cookies.set('refreshToken', refreshToken, refreshCookieOptions);

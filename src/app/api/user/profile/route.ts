@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { hashPassword, comparePassword } from '@/lib/auth';
+import { hashPassword, comparePassword } from '@/lib/auth-server';
 import { prisma } from '@/lib/prisma';
 
 function getAuthUser(request: NextRequest): { userId: string } | null {

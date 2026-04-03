@@ -1,14 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { hashPassword, generateAccessToken, generateRefreshToken, cookieOptions, refreshCookieOptions } from '@/lib/auth';
+import { generateAccessToken, generateRefreshToken, cookieOptions, refreshCookieOptions } from '@/lib/auth';
+import { hashPassword } from '@/lib/auth-server';
 import { prisma } from '@/lib/prisma';
 import { sendOTPEmail } from '@/lib/email';
 
-const otpStore = new Map<string, { otp: string; expires: number; name: string; email: string; password: string }>();
+const RATE_LIMIT_WINDOW = 60 * 1000;
+const MAX_ATTEMPTS = 3;
+
+const rateLimitStore = new Map<string, { count: number; windowStart: number }>();
+
+function checkRateLimit(identifier: string): boolean {
+  const now = Date.now();
+  const record = rateLimitStore.get(identifier);
+  if (!record || now - record.windowStart > RATE_LIMIT_WINDOW) {
+    rateLimitStore.set(identifier, { count: 1, windowStart: now });
+    return true;
+  }
+  if (record.count >= MAX_ATTEMPTS) {
+    return false;
+  }
+  record.count++;
+  return true;
+}
+
+async function cleanupExpiredOtps() {
+  try {
+    await prisma.otp.deleteMany({
+      where: { expires: { lt: new Date() } },
+    });
+  } catch (error) {
+    console.error('OTP cleanup error:', error);
+  }
+}
+
+setInterval(cleanupExpiredOtps, 5 * 60 * 1000);
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { name, phone, email, password } = body;
+    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown';
 
     if (!name || !phone || !email || !password) {
       return NextResponse.json(
@@ -24,10 +55,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!checkRateLimit(`${clientIp}:${phone}`)) {
+      return NextResponse.json(
+        { success: false, message: 'Too many requests. Please try again later.' },
+        { status: 429 }
+      );
+    }
+
     const existingUser = await prisma.user.findFirst({
-      where: {
-        OR: [{ phone }, { email }],
-      },
+      where: { OR: [{ phone }, { email }] },
     });
 
     if (existingUser) {
@@ -39,18 +75,15 @@ export async function POST(request: NextRequest) {
 
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     const hashedPassword = await hashPassword(password);
+    const expires = new Date(Date.now() + 5 * 60 * 1000);
 
-    otpStore.set(phone, {
-      otp,
-      expires: Date.now() + 5 * 60 * 1000,
-      name,
-      email,
-      password: hashedPassword,
+    await prisma.otp.upsert({
+      where: { phone_purpose: { phone, purpose: 'register' } },
+      update: { otp, email, expires, createdAt: new Date() },
+      create: { phone, email, otp, expires, purpose: 'register' },
     });
 
     await sendOTPEmail(email, otp, name);
-
-    console.log(`OTP for ${phone}: ${otp}`);
 
     return NextResponse.json({
       success: true,
@@ -69,11 +102,12 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { phone, email } = body;
+    const { phone } = body;
+    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown';
 
-    if (!phone || !email) {
+    if (!phone) {
       return NextResponse.json(
-        { success: false, message: 'Phone and email are required' },
+        { success: false, message: 'Phone is required' },
         { status: 400 }
       );
     }
@@ -85,34 +119,30 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const existingUser = await prisma.user.findFirst({
-      where: {
-        OR: [{ phone }, { email }],
-      },
-    });
-
-    if (existingUser) {
+    if (!checkRateLimit(`resend:${clientIp}:${phone}`)) {
       return NextResponse.json(
-        { success: false, message: 'User already exists' },
-        { status: 409 }
+        { success: false, message: 'Too many requests. Please try again later.' },
+        { status: 429 }
       );
     }
 
-    const stored = otpStore.get(phone);
-    
-    if (stored && Date.now() < stored.expires) {
-      await sendOTPEmail(stored.email, stored.otp, stored.name);
-      console.log(`OTP for ${phone}: ${stored.otp}`);
+    const otpRecord = await prisma.otp.findUnique({
+      where: { phone_purpose: { phone, purpose: 'register' } },
+    });
+
+    if (!otpRecord || new Date(otpRecord.expires) < new Date()) {
       return NextResponse.json({
-        success: true,
-        message: 'OTP resent to email',
-      });
+        success: false,
+        message: 'Please register again to get new OTP',
+      }, { status: 400 });
     }
 
+    await sendOTPEmail(otpRecord.email, otpRecord.otp, '');
+
     return NextResponse.json({
-      success: false,
-      message: 'Please register again to get new OTP',
-    }, { status: 400 });
+      success: true,
+      message: 'OTP resent to email',
+    });
 
   } catch (error) {
     console.error('OTP resend error:', error);
@@ -136,24 +166,26 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const stored = otpStore.get(phone);
+    const otpRecord = await prisma.otp.findUnique({
+      where: { phone_purpose: { phone, purpose: 'register' } },
+    });
 
-    if (!stored) {
+    if (!otpRecord) {
       return NextResponse.json(
         { success: false, message: 'OTP not found or expired' },
         { status: 400 }
       );
     }
 
-    if (Date.now() > stored.expires) {
-      otpStore.delete(phone);
+    if (new Date(otpRecord.expires) < new Date()) {
+      await prisma.otp.delete({ where: { id: otpRecord.id } });
       return NextResponse.json(
         { success: false, message: 'OTP expired' },
         { status: 400 }
       );
     }
 
-    if (stored.otp !== otp) {
+    if (otpRecord.otp !== otp) {
       return NextResponse.json(
         { success: false, message: 'Invalid OTP' },
         { status: 400 }
@@ -162,10 +194,10 @@ export async function GET(request: NextRequest) {
 
     const user = await prisma.user.create({
       data: {
-        name: stored.name,
+        name: '',
         phone,
-        email: stored.email,
-        password: stored.password,
+        email: otpRecord.email,
+        password: '',
         isActive: true,
         isSubscribed: false,
       },
@@ -178,15 +210,15 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    otpStore.delete(phone);
+    await prisma.otp.delete({ where: { id: otpRecord.id } });
 
-    const accessToken = generateAccessToken({
+    const accessToken = await generateAccessToken({
       userId: user.id,
       phone: user.phone,
       email: user.email || undefined,
     });
 
-    const refreshToken = generateRefreshToken({
+    const refreshToken = await generateRefreshToken({
       userId: user.id,
       type: 'refresh',
     });

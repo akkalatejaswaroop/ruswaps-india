@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { verifyToken } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+
+async function verifyAdmin(request: NextRequest): Promise<boolean> {
+  const token = request.cookies.get('accessToken')?.value;
+  if (!token) return false;
+  
+  const payload = (await verifyToken(token)) as any;
+  if (!payload) return false;
+  return payload.role === 'ADMIN';
+}
 
 export async function GET(request: NextRequest) {
   try {
-    const adminKey = request.headers.get('x-admin-key');
-    if (adminKey !== process.env.ADMIN_SECRET) {
+    if (!(await verifyAdmin(request))) {
       return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
     }
 
@@ -22,6 +31,7 @@ export async function GET(request: NextRequest) {
             phone: true,
             email: true,
             name: true,
+            role: true,
             isSubscribed: true,
             isActive: true,
             subscriptionExpiry: true,
@@ -180,6 +190,7 @@ export async function GET(request: NextRequest) {
           phone: true,
           email: true,
           name: true,
+          role: true,
           isSubscribed: true,
           isActive: true,
           subscriptionExpiry: true,
@@ -217,8 +228,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const adminKey = request.headers.get('x-admin-key');
-    if (adminKey !== process.env.ADMIN_SECRET) {
+    if (!(await verifyAdmin(request))) {
       return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
     }
 

@@ -20,8 +20,8 @@ interface OrderRequest {
 function getAuthUser(request: NextRequest): { userId: string } | null {
   const token = request.cookies.get('accessToken')?.value || request.headers.get('authorization')?.replace('Bearer ', '');
   if (!token) return null;
-  const payload = verifyToken(token);
-  if (!payload || 'type' in payload) return null;
+  const payload = verifyToken(token) as any;
+  if (!payload || payload.type === 'refresh') return null;
   return { userId: payload.userId };
 }
 
