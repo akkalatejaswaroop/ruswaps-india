@@ -8,6 +8,7 @@
 [build.environment]
   NODE_VERSION = "20"
   NPM_VERSION = "10"
+  SECRETS_SCAN_OMIT_KEYS = "SMTP_HOST"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
