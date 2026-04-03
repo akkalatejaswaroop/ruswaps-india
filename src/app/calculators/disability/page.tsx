@@ -9,7 +9,6 @@ import {
   RefreshCw
 } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function DisabilityCalculator() {
   const router = useRouter();

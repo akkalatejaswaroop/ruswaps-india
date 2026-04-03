@@ -46,7 +46,6 @@ interface RazorpayInstance {
   open(): void;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 interface Plan {
   name: string;
@@ -72,7 +71,7 @@ export default function Subscription() {
       }
 
       try {
-        const response = await fetch(`${API_URL}/api/user/profile`, {
+        const response = await fetch(`/api/user/profile`, {
           headers: { 'Authorization': `Bearer ${token}` },
         });
         const data = await response.json();
@@ -121,7 +120,7 @@ export default function Subscription() {
     const token = localStorage.getItem('accessToken');
     
     try {
-      const response = await fetch(`${API_URL}/api/payments/razorpay`, {
+      const response = await fetch(`/api/payments/razorpay`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -144,7 +143,7 @@ export default function Subscription() {
           description: `${plans[selectedPlan].name} Subscription`,
           order_id: data.data.orderId,
           handler: async (response) => {
-            const verifyResponse = await fetch(`${API_URL}/api/payments/razorpay`, {
+            const verifyResponse = await fetch(`/api/payments/razorpay`, {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',

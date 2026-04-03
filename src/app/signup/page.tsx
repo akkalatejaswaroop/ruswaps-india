@@ -5,7 +5,6 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Mail, Lock, Phone, User, ArrowLeft, Check } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function Signup() {
   const router = useRouter();
@@ -58,7 +57,7 @@ export default function Signup() {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/api/auth/register`, {
+      const response = await fetch(`/api/auth/register`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -105,7 +104,7 @@ export default function Signup() {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/api/auth/register?phone=${formData.phone}&otp=${enteredOtp}`);
+      const response = await fetch(`/api/auth/register?phone=${formData.phone}&otp=${enteredOtp}`);
       const data = await response.json();
 
       if (data.success) {

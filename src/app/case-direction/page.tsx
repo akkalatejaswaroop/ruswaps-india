@@ -20,7 +20,6 @@ import {
   Loader2
 } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function CaseDirection() {
   const router = useRouter();
@@ -56,7 +55,7 @@ export default function CaseDirection() {
   const loadCases = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_URL}/api/cases`, {
+      const res = await fetch(`/api/cases`, {
         credentials: 'include',
       });
       const data = await res.json();
@@ -73,7 +72,7 @@ export default function CaseDirection() {
   const handleAddCase = async () => {
     try {
       setSaving(true);
-      const res = await fetch(`${API_URL}/api/cases`, {
+      const res = await fetch(`/api/cases`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newCase),
@@ -104,7 +103,7 @@ export default function CaseDirection() {
     if (!editingCase) return;
     try {
       setSaving(true);
-      const res = await fetch(`${API_URL}/api/cases`, {
+      const res = await fetch(`/api/cases`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -135,7 +134,7 @@ export default function CaseDirection() {
   const handleDeleteCase = async (id: string) => {
     if (!confirm('Are you sure you want to delete this case?')) return;
     try {
-      const res = await fetch(`${API_URL}/api/cases?caseId=${id}`, {
+      const res = await fetch(`/api/cases?caseId=${id}`, {
         method: 'DELETE',
         credentials: 'include',
       });

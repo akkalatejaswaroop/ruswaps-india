@@ -6,7 +6,6 @@ import { ArrowLeft, AlertTriangle, Calculator, Download, RefreshCw } from 'lucid
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function HitRunCalculator() {
   const router = useRouter();
@@ -54,7 +53,7 @@ export default function HitRunCalculator() {
     if (token) {
       setSaving(true);
       try {
-        await fetch(`${API_URL}/api/calculations`, {
+        await fetch(`/api/calculations`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

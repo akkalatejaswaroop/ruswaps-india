@@ -22,7 +22,6 @@ import {
   Send
 } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function AdminPanel() {
   const router = useRouter();
@@ -70,7 +69,7 @@ export default function AdminPanel() {
     setLoading(true);
     setError('');
     try {
-      const url = `${API_URL}/api/admin/users?type=${activeTab}&page=${page}`;
+      const url = `/api/admin/users?type=${activeTab}&page=${page}`;
       const res = await fetch(url, { credentials: 'include' });
       const data = await res.json();
       
@@ -97,7 +96,7 @@ export default function AdminPanel() {
 
   const fetchUserDetail = async (userId) => {
     try {
-      const res = await fetch(`${API_URL}/api/admin/users?type=user-detail&userId=${userId}`, {
+      const res = await fetch(`/api/admin/users?type=user-detail&userId=${userId}`, {
         credentials: 'include',
       });
       const data = await res.json();
@@ -109,7 +108,7 @@ export default function AdminPanel() {
 
   const handleAction = async (userId, action) => {
     try {
-      const res = await fetch(`${API_URL}/api/admin/actions`, {
+      const res = await fetch(`/api/admin/actions`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, action }),
@@ -124,7 +123,7 @@ export default function AdminPanel() {
 
   const handleBroadcast = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/admin/users`, {
+      const res = await fetch(`/api/admin/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'broadcast', ...broadcastForm }),

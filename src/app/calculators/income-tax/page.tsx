@@ -6,7 +6,6 @@ import { ArrowLeft, CreditCard, Calculator, Download, RefreshCw } from 'lucide-r
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export default function IncomeTaxInterestCalculator() {
   const router = useRouter();
@@ -63,7 +62,7 @@ export default function IncomeTaxInterestCalculator() {
     if (token) {
       setSaving(true);
       try {
-        await fetch(`${API_URL}/api/calculations`, {
+        await fetch(`/api/calculations`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

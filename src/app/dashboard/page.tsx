@@ -25,7 +25,6 @@ import {
   Check
 } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 const features = [
   { name: 'Motor Vehicle Accident Claims', icon: Truck, href: '/calculators/mva-claims', color: 'primary' },
@@ -61,7 +60,7 @@ export default function Dashboard() {
       }
 
       try {
-        const response = await fetch(`${API_URL}/api/user/profile`, {
+        const response = await fetch(`/api/user/profile`, {
           headers: {
             'Authorization': `Bearer ${token}`,
           },

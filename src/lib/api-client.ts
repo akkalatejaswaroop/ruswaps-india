@@ -1,4 +1,3 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 export async function saveCalculation(type: string, data: unknown) {
   if (typeof window === 'undefined') return;
@@ -7,7 +6,7 @@ export async function saveCalculation(type: string, data: unknown) {
   if (!token) return;
 
   try {
-    await fetch(`${API_URL}/api/calculations`, {
+    await fetch(`/api/calculations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -27,7 +26,7 @@ export async function fetchUserProfile() {
   if (!token) return null;
 
   try {
-    const response = await fetch(`${API_URL}/api/user/profile`, {
+    const response = await fetch(`/api/user/profile`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     const data = await response.json();
