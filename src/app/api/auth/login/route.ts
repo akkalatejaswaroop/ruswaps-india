@@ -6,23 +6,27 @@ import { prisma } from '@/lib/prisma';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { phone, password } = body;
+    const { phone, email, identifier, password } = body;
+    const loginIdentifier = identifier || phone || email;
 
-    if (!phone || !password) {
+    if (!loginIdentifier || !password) {
       return NextResponse.json(
-        { success: false, message: 'Phone and password are required' },
+        { success: false, message: 'Phone/Email and password are required' },
         { status: 400 }
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: { phone },
+    const isEmail = loginIdentifier.includes('@');
+
+    const user = await prisma.user.findFirst({
+      where: isEmail ? { email: loginIdentifier } : { phone: loginIdentifier },
       select: {
         id: true,
         phone: true,
         email: true,
         name: true,
         password: true,
+        role: true,
         isSubscribed: true,
         subscriptionExpiry: true,
         isActive: true,
@@ -57,6 +61,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       phone: user.phone,
       email: user.email || undefined,
+      role: user.role,
     });
 
     const refreshToken = await generateRefreshToken({
@@ -72,6 +77,7 @@ export async function POST(request: NextRequest) {
           phone: user.phone,
           email: user.email,
           name: user.name,
+          role: user.role,
           isSubscribed,
           subscriptionExpiry: user.subscriptionExpiry,
         },

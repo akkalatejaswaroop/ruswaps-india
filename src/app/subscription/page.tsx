@@ -88,6 +88,17 @@ export default function Subscription() {
   }, [router]);
 
   const plans: Record<string, Plan> = {
+    free: {
+      name: 'Free Tier',
+      price: 0,
+      period: 'forever',
+      features: [
+        'Limited Application Features',
+        'Basic Calculators',
+        'No Premium PDF Export',
+        'Community Support'
+      ]
+    },
     monthly: {
       name: 'Monthly',
       price: 299,
@@ -261,7 +272,7 @@ export default function Subscription() {
           </div>
         )}
 
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
+        <div className="grid lg:grid-cols-3 md:grid-cols-2 gap-6 mb-8">
           {Object.entries(plans).map(([key, plan]) => (
             <div
               key={key}
@@ -289,7 +300,19 @@ export default function Subscription() {
                 ))}
               </ul>
               <button
-                onClick={() => selectedPlan === key && !user?.isSubscribed && handlePayment()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (user?.isSubscribed) return;
+                  if (selectedPlan !== key) {
+                    setSelectedPlan(key);
+                  } else {
+                    if (key === 'free') {
+                      router.push('/dashboard');
+                    } else {
+                      handlePayment();
+                    }
+                  }
+                }}
                 disabled={processing || user?.isSubscribed}
                 className={`w-full py-4 rounded-xl font-semibold transition ${
                   selectedPlan === key && !user?.isSubscribed
@@ -297,7 +320,13 @@ export default function Subscription() {
                     : 'bg-gray-100 text-gray-400'
                 }`}
               >
-                {processing ? 'Processing...' : user?.isSubscribed ? 'Current Plan' : selectedPlan === key ? 'Subscribe Now' : 'Select Plan'}
+                {processing && key !== 'free' 
+                  ? 'Processing...' 
+                  : user?.isSubscribed 
+                    ? 'Current Plan' 
+                    : selectedPlan === key 
+                      ? (key === 'free' ? 'Continue with Free Tier' : 'Subscribe Now') 
+                      : 'Select Plan'}
               </button>
             </div>
           ))}

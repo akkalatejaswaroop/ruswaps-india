@@ -62,7 +62,6 @@ export async function POST(request: NextRequest) {
     }
 
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    const hashedPassword = await hashPassword(password);
     const expires = new Date(Date.now() + 5 * 60 * 1000);
 
     await prisma.otp.upsert({
@@ -141,13 +140,12 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function PATCH(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const phone = searchParams.get('phone');
-    const otp = searchParams.get('otp');
+    const body = await request.json();
+    const { phone, otp, name, password } = body;
 
-    if (!phone || !otp) {
+    if (!phone || !otp || !name || !password) {
       return NextResponse.json(
         { success: false, message: 'Phone and OTP are required' },
         { status: 400 }
@@ -180,12 +178,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const hashedPassword = await hashPassword(password);
+
     const user = await prisma.user.create({
       data: {
-        name: '',
+        name,
         phone,
         email: otpRecord.email,
-        password: '',
+        password: hashedPassword,
         isActive: true,
         isSubscribed: false,
       },
@@ -204,6 +204,7 @@ export async function GET(request: NextRequest) {
       userId: user.id,
       phone: user.phone,
       email: user.email || undefined,
+      role: 'USER',
     });
 
     const refreshToken = await generateRefreshToken({

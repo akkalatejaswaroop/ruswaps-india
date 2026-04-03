@@ -104,7 +104,16 @@ export default function Signup() {
     setLoading(true);
 
     try {
-      const response = await fetch(`/api/auth/register?phone=${formData.phone}&otp=${enteredOtp}`);
+      const response = await fetch(`/api/auth/register`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: formData.phone,
+          otp: enteredOtp,
+          name: formData.name,
+          password: formData.password
+        }),
+      });
       const data = await response.json();
 
       if (data.success) {
