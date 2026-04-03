@@ -149,21 +149,25 @@ export async function PATCH(request: NextRequest) {
     if (email) email = email.trim().toLowerCase();
     if (phone) phone = phone.trim();
 
-    if ((!phone && !email) || !otp || !name || !password) {
+    const missingFields = [];
+    if (!phone && !email) missingFields.push('Phone/Email');
+    if (!otp) missingFields.push('OTP');
+    if (!name) missingFields.push('Name');
+    if (!password) missingFields.push('Password');
+
+    if (missingFields.length > 0) {
       return NextResponse.json(
-        { success: false, message: 'Phone/Email and OTP are required' },
+        { success: false, message: `Missing required fields: ${missingFields.join(', ')}` },
         { status: 400 }
       );
     }
 
+    const andConditions: any[] = [{ purpose: 'register' }];
+    if (phone) andConditions.push({ phone });
+    if (email) andConditions.push({ email });
+
     const otpRecord = await prisma.otp.findFirst({
-      where: {
-        AND: [
-          phone ? { phone } : {},
-          email ? { email } : {},
-          { purpose: 'register' }
-        ]
-      },
+      where: { AND: andConditions },
     });
 
     if (!otpRecord) {
