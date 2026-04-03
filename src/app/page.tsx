@@ -44,7 +44,7 @@ export default function Home() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <Link href="/" className="flex items-center gap-3">
-                <Image src="/main_logo.jpg" alt="Ruswaps" width={200} height={80} className="h-20 w-auto object-contain" />
+                <Image src="/main_logo.jpg" alt="Ruswaps" width={140} height={48} className="h-12 w-auto object-contain" />
               </Link>
             </div>
 
