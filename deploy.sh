@@ -33,6 +33,15 @@ echo "Generating Prisma Client..."
 npx prisma generate
 echo ""
 
+# Deploy Database Migrations
+echo "Deploying database migrations..."
+npx prisma migrate deploy
+if [ $? -ne 0 ]; then
+    echo "ERROR: Database migration failed"
+    exit 1
+fi
+echo ""
+
 # Build the application
 echo "Building the application..."
 npm run build

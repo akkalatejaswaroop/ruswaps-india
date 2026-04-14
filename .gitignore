@@ -55,3 +55,6 @@ public/uploads/
 tmp/
 temp/
 .aider*
+
+scratch/
+nul
