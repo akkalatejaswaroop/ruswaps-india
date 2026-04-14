@@ -3,8 +3,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Mail, Lock, ArrowLeft } from 'lucide-react';
-
+import { Eye, EyeOff, Mail, Lock, ArrowLeft, Loader2 } from 'lucide-react';
 
 export default function Login() {
   const router = useRouter();
@@ -13,14 +12,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-      router.push('/dashboard');
-    }
-  }, [router]);
-
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
@@ -29,26 +21,24 @@ export default function Login() {
       const response = await fetch(`/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(formData),
       });
 
       const data = await response.json();
 
-      if (data.success) {
-        localStorage.setItem('accessToken', data.data.accessToken);
-        localStorage.setItem('user', JSON.stringify(data.data.user));
-        localStorage.setItem('isLoggedIn', 'true');
-        
-        if (data.statusCode === 300) {
+      if (response.ok && data && data.success) {
+        if (data.data?.user?.isSubscribed === false && data.data?.user?.subscriptionExpiry) {
           router.push('/subscription');
         } else {
           router.push('/dashboard');
         }
       } else {
-        setError(data.message || 'Login failed');
+        setError(data?.message || 'Login failed. Please check your credentials.');
       }
     } catch (err) {
-      setError('Unable to connect to server');
+      console.error('Login error:', err);
+      setError('Unable to connect to server. Please try again.');
     }
     setLoading(false);
   };
@@ -61,7 +51,7 @@ export default function Login() {
             <ArrowLeft size={20} className="mr-2" /> Back to Home
           </Link>
           <div className="flex items-center justify-center gap-2 mb-4">
-            <Image src="/logo.png" alt="Ruswaps" width={96} height={96} className="w-24 h-24 object-contain" />
+            <Image src="/main_logo.jpg" alt="Ruswaps" width={180} height={50} className="h-12 w-auto object-contain" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Welcome Back</h1>
           <p className="text-gray-500 mt-2">Sign in to access your dashboard</p>
@@ -105,6 +95,7 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                   className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
@@ -120,8 +111,9 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold hover:opacity-90 transition disabled:opacity-50"
+              className="w-full py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold hover:opacity-90 transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
+              {loading && <Loader2 size={20} className="animate-spin" />}
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>

@@ -118,9 +118,6 @@ export default function Signup() {
       const data = await response.json();
 
       if (data.success) {
-        localStorage.setItem('accessToken', data.data.accessToken);
-        localStorage.setItem('user', JSON.stringify(data.data.user));
-        localStorage.setItem('isLoggedIn', 'true');
         router.push('/subscription');
       } else {
         setError(data.message || 'Invalid OTP');

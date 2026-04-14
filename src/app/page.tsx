@@ -1,7 +1,9 @@
 "use client";
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Calculator, 
   FileText, 
@@ -21,20 +23,67 @@ import {
   CheckCircle,
   Download,
   Share2,
-  CreditCard
+  CreditCard,
+  Lock,
+  Eye,
+  EyeOff
 } from 'lucide-react';
+import { calculateMVA } from '@/lib/calculations';
 
 export default function Home() {
+  const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [signupModal, setSignupModal] = useState(false);
   const [formData, setFormData] = useState({ name: '', phone: '' });
+  
+  const [previewAge, setPreviewAge] = useState(30);
+  const [previewIncome, setPreviewIncome] = useState(25000);
+  const [previewResult, setPreviewResult] = useState<number | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
-  const handleSubmit = (e) => {
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (response.ok) {
+          router.push('/dashboard');
+        }
+      } catch {
+        // Not logged in, stay on home page
+      }
+    };
+    checkAuth();
+  }, [router]);
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     alert('Thank you for signing up! We will contact you soon.');
     setSignupModal(false);
     setFormData({ name: '', phone: '' });
   };
+
+  const calculatePreview = useCallback(() => {
+    const result = calculateMVA({
+      claimType: 'fatal',
+      age: previewAge,
+      monthlyIncome: previewIncome,
+      claimantType: 'married',
+    });
+    setPreviewResult(result.totalWithInterest);
+    setShowPreview(true);
+  }, [previewAge, previewIncome]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!showPreview && previewAge && previewIncome) {
+        calculatePreview();
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [previewAge, previewIncome, showPreview, calculatePreview]);
 
   return (
     <div className="min-h-screen bg-white">
@@ -136,7 +185,12 @@ export default function Home() {
             </div>
             <div className="relative">
               <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-secondary/20 rounded-3xl blur-3xl"></div>
-              <div className="relative bg-white rounded-3xl shadow-2xl p-8 border border-gray-100">
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6 }}
+                className="relative bg-white/80 backdrop-blur-lg rounded-3xl shadow-2xl p-8 border border-white/50"
+              >
                 <div className="bg-gradient-to-br from-primary to-secondary rounded-2xl p-1">
                   <div className="bg-white rounded-2xl p-6">
                     <div className="flex items-center gap-3 mb-6">
@@ -144,27 +198,110 @@ export default function Home() {
                         <Calculator className="text-primary" size={24} />
                       </div>
                       <div>
-                        <h3 className="font-bold text-gray-900">Quick Calculator</h3>
-                        <p className="text-sm text-gray-500">Instant Results</p>
+                        <h3 className="font-bold text-gray-900">Try It Now!</h3>
+                        <p className="text-sm text-gray-500">Live MVA Calculator Preview</p>
                       </div>
                     </div>
-                    <div className="space-y-4">
-                      <div className="p-4 bg-gray-50 rounded-xl">
-                        <div className="text-sm text-gray-500">Motor Vehicle Accident</div>
-                        <div className="text-2xl font-bold text-primary">₹8,00,000+</div>
+                    
+                    <div className="space-y-4 mb-6">
+                      <div>
+                        <label className="text-xs font-medium text-gray-500 mb-2 block">Age of Deceased</label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="range"
+                            min="18"
+                            max="65"
+                            value={previewAge}
+                            onChange={(e) => { setPreviewAge(Number(e.target.value)); setShowPreview(false); }}
+                            className="flex-1 accent-primary"
+                          />
+                          <span className="w-12 text-center font-bold text-primary">{previewAge}</span>
+                        </div>
                       </div>
-                      <div className="p-4 bg-gray-50 rounded-xl">
-                        <div className="text-sm text-gray-500">Workmen Compensation</div>
-                        <div className="text-2xl font-bold text-secondary">₹5,00,000+</div>
-                      </div>
-                      <div className="p-4 bg-gray-50 rounded-xl">
-                        <div className="text-sm text-gray-500">Disability Assessment</div>
-                        <div className="text-2xl font-bold text-primary">100%</div>
+                      
+                      <div>
+                        <label className="text-xs font-medium text-gray-500 mb-2 block">Monthly Income (₹)</label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="range"
+                            min="5000"
+                            max="100000"
+                            step="1000"
+                            value={previewIncome}
+                            onChange={(e) => { setPreviewIncome(Number(e.target.value)); setShowPreview(false); }}
+                            className="flex-1 accent-primary"
+                          />
+                          <span className="w-20 text-right font-bold text-primary">₹{previewIncome.toLocaleString()}</span>
+                        </div>
                       </div>
                     </div>
+
+                    <AnimatePresence mode="wait">
+                      {previewResult && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.9 }}
+                          className="relative"
+                        >
+                          <div className="absolute inset-0 bg-gradient-to-r from-primary/10 to-secondary/10 blur-xl rounded-xl" />
+                          <div className="relative p-4 bg-gradient-to-r from-primary/5 to-secondary/5 rounded-xl border border-primary/20">
+                            <div className="text-center">
+                              <p className="text-xs text-gray-500 mb-1">Estimated Compensation</p>
+                              {showPreview ? (
+                                <motion.p 
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 1 }}
+                                  className="text-2xl font-black premium-gradient-text"
+                                >
+                                  ₹{previewResult.toLocaleString('en-IN')}
+                                </motion.p>
+                              ) : (
+                                <div className="relative h-8 flex items-center justify-center">
+                                  <div className="absolute inset-0 flex items-center justify-center">
+                                    {[...Array(5)].map((_, i) => (
+                                      <motion.span
+                                        key={i}
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: [0, 1, 0] }}
+                                        transition={{ 
+                                          duration: 0.6, 
+                                          delay: i * 0.1,
+                                          repeat: Infinity,
+                                          repeatDelay: 0.4
+                                        }}
+                                        className="w-2 h-2 bg-primary rounded-full mx-0.5"
+                                      />
+                                    ))}
+                                  </div>
+                                  <motion.p 
+                                    initial={{ opacity: 0 }}
+                                    animate={{ opacity: [0, 1, 0] }}
+                                    transition={{ duration: 0.8, repeat: Infinity }}
+                                    className="text-sm text-gray-400"
+                                  >
+                                    Calculating...
+                                  </motion.p>
+                                </div>
+                              )}
+                            </div>
+                            {!showPreview && (
+                              <p className="text-[10px] text-center text-gray-400 mt-2">
+                                Sign up to unlock full calculation with dependents, funeral expenses & interest
+                              </p>
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
-              </div>
+                
+                <div className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-500">
+                  <Lock size={12} />
+                  <span>Professional calculations require free signup</span>
+                </div>
+              </motion.div>
             </div>
           </div>
         </div>
@@ -426,14 +563,14 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Case Direction Section */}
+      {/* Case Directory Section */}
       <section className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div className="space-y-6">
-              <h2 className="text-3xl md:text-4xl font-bold text-gray-900">
-                Case <span className="text-primary">Direction</span>
-              </h2>
+               <h2 className="text-3xl md:text-4xl font-bold text-gray-900">
+                 Case <span className="text-primary">Directory</span>
+               </h2>
               <p className="text-gray-600 leading-relaxed">
                 Manage your legal cases efficiently with our comprehensive case direction feature.
               </p>
@@ -457,7 +594,7 @@ export default function Home() {
                   <p className="text-gray-600">Download cases list as PDF report</p>
                 </li>
               </ul>
-              <Link href="/case-direction" className="inline-flex items-center px-6 py-3 bg-primary text-white rounded-full font-medium hover:bg-primary/90 transition">
+              <Link href="/case-directory" className="inline-flex items-center px-6 py-3 bg-primary text-white rounded-full font-medium hover:bg-primary/90 transition">
                 Start Managing Cases <ChevronRight className="ml-2" size={18} />
               </Link>
             </div>
@@ -590,7 +727,8 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <div className="flex items-center gap-3">
-              <Image src="/logo.png" alt="Ruswaps" width={64} height={64} className="w-16 h-16 object-contain" />
+              <Image src="/logo.png" alt="Ruswaps" width={48} height={48} className="h-12 w-12 object-contain" />
+              <span className="text-white font-bold text-lg">Ruswaps</span>
             </div>
             <div className="flex gap-6 text-gray-400">
               <Link href="/privacy" className="hover:text-white transition">Privacy Policy</Link>

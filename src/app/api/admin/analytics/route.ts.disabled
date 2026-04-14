@@ -1,0 +1,625 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { verifyToken, TokenPayload, RefreshTokenPayload } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
+
+const TRUSTED_PROXIES = (process.env.TRUSTED_PROXIES || '127.0.0.1,::1').split(',').map(p => p.trim());
+
+function isTrustedProxy(ip: string): boolean {
+  return TRUSTED_PROXIES.includes(ip);
+}
+
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    const ips = forwardedFor.split(',').map(ip => ip.trim());
+    for (const ip of ips) {
+      if (!isTrustedProxy(ip)) return ip;
+    }
+  }
+  const realIp = request.headers.get('x-real-ip');
+  if (realIp && !isTrustedProxy(realIp)) return realIp;
+  return '127.0.0.1';
+}
+
+function isAccessToken(payload: TokenPayload | RefreshTokenPayload | null): payload is TokenPayload {
+  return payload !== null && 'role' in payload;
+}
+
+async function verifyAdmin(request: NextRequest): Promise<boolean> {
+  const token = request.cookies.get('accessToken')?.value;
+  if (!token) return false;
+  const payload = await verifyToken(token);
+  if (!payload || !isAccessToken(payload)) return false;
+  return payload.role === 'ADMIN';
+}
+
+function sanitizeString(str: unknown, maxLength: number = 255): string {
+  if (typeof str !== 'string') return '';
+  return str.trim().slice(0, maxLength);
+}
+
+export async function GET(request: NextRequest) {
+  try {
+
+    if (!(await verifyAdmin(request))) {
+      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const type = searchParams.get('type') || 'dashboard';
+    const period = searchParams.get('period') || '30';
+    const days = parseInt(period);
+
+    if (type === 'dashboard') {
+      const now = new Date();
+      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthAgo = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      const lastMonthAgo = new Date(now.getTime() - days * 2 * 24 * 60 * 60 * 1000);
+
+      const [
+        totalUsers,
+        subscribedUsers,
+        totalCalculations,
+        activeUsersToday,
+        newUsersThisMonth,
+        newUsersLastMonth,
+        revenueThisMonth,
+        revenueLastMonth,
+        calculationsToday,
+        dailyRevenue,
+        monthlyRecurringRevenue,
+        avgRevenuePerUser,
+      ] = await Promise.all([
+        prisma.user.count(),
+        prisma.user.count({ where: { isSubscribed: true } }),
+        prisma.calculation.count(),
+        prisma.user.count({ where: { updatedAt: { gte: dayAgo } } }),
+        prisma.user.count({ where: { createdAt: { gte: monthAgo } } }),
+        prisma.user.count({ where: { createdAt: { gte: lastMonthAgo, lt: monthAgo } } }),
+        prisma.subscription.aggregate({ where: { status: 'completed', createdAt: { gte: monthAgo } }, _sum: { amount: true } }),
+        prisma.subscription.aggregate({ where: { status: 'completed', createdAt: { gte: lastMonthAgo, lt: monthAgo } }, _sum: { amount: true } }),
+        prisma.calculation.count({ where: { createdAt: { gte: dayAgo } } }),
+        prisma.subscription.findMany({
+          where: { status: 'completed', createdAt: { gte: monthAgo } },
+          select: { amount: true, createdAt: true },
+        }),
+        prisma.user.findMany({ where: { isSubscribed: true, subscriptionExpiry: { gt: now } }, select: { subscriptionExpiry: true } }),
+        prisma.subscription.findMany({ where: { status: 'completed', createdAt: { gte: monthAgo } }, select: { amount: true, userId: true } }),
+      ]);
+
+      const dailyRevenueMap: Record<string, number> = {};
+      dailyRevenue.forEach((r: { amount: { toNumber: () => number }; createdAt: Date }) => {
+        const date = r.createdAt.toISOString().split('T')[0];
+        dailyRevenueMap[date] = (dailyRevenueMap[date] || 0) + Number(r.amount);
+      });
+
+      const mrr = monthlyRecurringRevenue.reduce((sum: number, u: { subscriptionExpiry: Date }) => {
+        const daysLeft = Math.max(0, (u.subscriptionExpiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        return sum + (daysLeft > 30 ? 99 : days > 10 ? 299 : 0);
+      }, 0);
+
+      const uniqueUsers = new Set(avgRevenuePerUser.map((r: { userId: string }) => r.userId)).size;
+      const totalRev = avgRevenuePerUser.reduce((sum: number, r: { amount: { toNumber: () => number } }) => sum + Number(r.amount), 0);
+      const arpu = uniqueUsers > 0 ? (totalRev / uniqueUsers).toFixed(2) : '0';
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          totalUsers,
+          subscribedUsers,
+          freeUsers: totalUsers - subscribedUsers,
+          totalCalculations,
+          activeUsersToday,
+          calculationsToday,
+          newUsersThisMonth,
+          userGrowth: newUsersLastMonth > 0 ? ((newUsersThisMonth - newUsersLastMonth) / newUsersLastMonth * 100).toFixed(1) : '0',
+          revenueThisMonth: Number(revenueThisMonth._sum.amount || 0),
+          revenueLastMonth: Number(revenueLastMonth._sum.amount || 0),
+          revenueGrowth: revenueLastMonth._sum.amount ? ((Number(revenueThisMonth._sum.amount || 0) - Number(revenueLastMonth._sum.amount)) / Number(revenueLastMonth._sum.amount) * 100).toFixed(1) : '0',
+          dailyRevenue: Object.entries(dailyRevenueMap).map(([date, amount]) => ({ date, amount })),
+          mrr: Math.round(mrr),
+          arpu,
+          conversionRate: totalUsers > 0 ? ((subscribedUsers / totalUsers) * 100).toFixed(1) : '0',
+        },
+      });
+    }
+
+    if (type === 'revenue') {
+      const now = new Date();
+      const monthAgo = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      
+      const [subscriptions, monthlyPlan, annualPlan, failedPayments, refunds] = await Promise.all([
+        prisma.subscription.findMany({
+          where: { createdAt: { gte: monthAgo } },
+          include: { user: { select: { name: true, phone: true, email: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 100,
+        }),
+        prisma.subscription.count({ where: { plan: 'monthly', createdAt: { gte: monthAgo }, status: 'completed' } }),
+        prisma.subscription.count({ where: { plan: 'annual', createdAt: { gte: monthAgo }, status: 'completed' } }),
+        prisma.subscription.count({ where: { status: 'failed', createdAt: { gte: monthAgo } } }),
+        prisma.subscription.count({ where: { status: 'refunded', createdAt: { gte: monthAgo } } }),
+      ]);
+
+      const revenueByDay: Record<string, number> = {};
+      let totalRevenue = 0;
+      subscriptions.filter((s: { status: string }) => s.status === 'completed').forEach((s: { amount: { toNumber: () => number }; createdAt: Date }) => {
+        const date = s.createdAt.toISOString().split('T')[0];
+        revenueByDay[date] = (revenueByDay[date] || 0) + Number(s.amount);
+        totalRevenue += Number(s.amount);
+      });
+
+      const expectedMRR = (monthlyPlan * 99) + (annualPlan * 299) / 12;
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          subscriptions,
+          totalRevenue,
+          monthlyPlanCount: monthlyPlan,
+          annualPlanCount: annualPlan,
+          monthlyPlanPercentage: (monthlyPlan + annualPlan) > 0 ? ((monthlyPlan / (monthlyPlan + annualPlan)) * 100).toFixed(1) : '0',
+          annualPlanPercentage: (monthlyPlan + annualPlan) > 0 ? ((annualPlan / (monthlyPlan + annualPlan)) * 100).toFixed(1) : '0',
+          failedPayments,
+          refunds,
+          revenueByDay: Object.entries(revenueByDay).map(([date, amount]) => ({ date, amount })),
+          expectedMRR: Math.round(expectedMRR),
+        },
+      });
+    }
+
+    if (type === 'users') {
+      const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+      const limit = Math.min(Math.max(1, parseInt(searchParams.get('limit') || '20')), 100);
+      const skip = (page - 1) * limit;
+      const search = searchParams.get('search') || '';
+      const status = searchParams.get('status');
+      const subscription = searchParams.get('subscription');
+      const dateFrom = searchParams.get('dateFrom');
+      const dateTo = searchParams.get('dateTo');
+
+      const whereClause: Record<string, unknown> = {};
+      if (search) {
+        whereClause.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+      if (status === 'active') whereClause.isActive = true;
+      if (status === 'inactive') whereClause.isActive = false;
+      if (subscription === 'premium') whereClause.isSubscribed = true;
+      if (subscription === 'free') whereClause.isSubscribed = false;
+      if (dateFrom || dateTo) {
+        whereClause.createdAt = {};
+        if (dateFrom) (whereClause.createdAt as Record<string, Date>).gte = new Date(dateFrom);
+        if (dateTo) (whereClause.createdAt as Record<string, Date>).lte = new Date(dateTo);
+      }
+
+      const [users, total, premiumCount, freeCount, activeCount] = await Promise.all([
+        prisma.user.findMany({
+          where: whereClause,
+          select: {
+            id: true, name: true, phone: true, email: true, role: true,
+            isSubscribed: true, isActive: true, subscriptionExpiry: true, createdAt: true, updatedAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        prisma.user.count({ where: whereClause }),
+        prisma.user.count({ where: { isSubscribed: true } }),
+        prisma.user.count({ where: { isSubscribed: false } }),
+        prisma.user.count({ where: { isActive: true } }),
+      ]);
+
+      return NextResponse.json({
+        success: true,
+        data: users,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+        stats: { premium: premiumCount, free: freeCount, active: activeCount },
+      });
+    }
+
+    if (type === 'user-detail') {
+      const userId = searchParams.get('userId');
+      if (!userId) return NextResponse.json({ success: false, message: 'User ID required' }, { status: 400 });
+
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true, name: true, phone: true, email: true, role: true,
+          isSubscribed: true, isActive: true, subscriptionExpiry: true, createdAt: true, playerId: true,
+        },
+      });
+      if (!user) return NextResponse.json({ success: false, message: 'User not found' }, { status: 404 });
+
+      const [calculations, subscriptions, cases, notifications] = await Promise.all([
+        prisma.calculation.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 50 }),
+        prisma.subscription.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
+        prisma.case.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
+        prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      ]);
+
+      return NextResponse.json({ success: true, data: { user, calculations, subscriptions, cases, notifications } });
+    }
+
+    if (type === 'calculations') {
+      const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+      const limit = Math.min(Math.max(1, parseInt(searchParams.get('limit') || '20')), 100);
+      const skip = (page - 1) * limit;
+      const calcType = searchParams.get('calcType');
+
+      const whereClause: Record<string, unknown> = {};
+      if (calcType) whereClause.type = calcType;
+
+      const [calculations, total, byType] = await Promise.all([
+        prisma.calculation.findMany({
+          where: whereClause,
+          include: { user: { select: { name: true, phone: true } } },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        prisma.calculation.count({ where: whereClause }),
+        prisma.calculation.groupBy({ by: ['type'], _count: { type: true } }),
+      ]);
+
+      const avgValues: Record<string, { total: number; count: number }> = {};
+      calculations.forEach((c) => {
+        if (c.resultData && typeof c.resultData === 'object') {
+          const rd = c.resultData as Record<string, unknown>;
+          const compensation = rd.totalCompensation || rd.compensation || rd.totalAmount;
+          if (compensation && !isNaN(Number(compensation))) {
+            if (!avgValues[c.type]) avgValues[c.type] = { total: 0, count: 0 };
+            avgValues[c.type].total += Number(compensation);
+            avgValues[c.type].count++;
+          }
+        }
+      });
+
+      return NextResponse.json({
+        success: true,
+        data: calculations,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+        stats: byType.map((t: { type: string; _count: { type: number } }) => ({
+          type: t.type,
+          count: t._count.type,
+          avgValue: avgValues[t.type] ? Math.round(avgValues[t.type].total / avgValues[t.type].count) : 0,
+        })),
+      });
+    }
+
+    if (type === 'notifications') {
+      const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+      const limit = Math.min(Math.max(1, parseInt(searchParams.get('limit') || '20')), 100);
+      const skip = (page - 1) * limit;
+
+      const [notifications, total, templates, scheduled] = await Promise.all([
+        prisma.notification.findMany({
+          include: { user: { select: { name: true, phone: true } } },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        prisma.notification.count(),
+        prisma.notificationTemplate.findMany({ orderBy: { createdAt: 'desc' } }),
+        prisma.scheduledNotification.findMany({ orderBy: { scheduledAt: 'desc' }, take: 20 }),
+      ]);
+
+      return NextResponse.json({
+        success: true,
+        data: notifications,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+        templates,
+        scheduled,
+      });
+    }
+
+    if (type === 'content') {
+      const [dictionary, documents, banners, news, appVersion] = await Promise.all([
+        prisma.legalDictionary.findMany({ orderBy: { term: 'asc' } }),
+        prisma.wsDocument.findMany({ orderBy: { createdAt: 'desc' } }),
+        prisma.banner.findMany({ orderBy: { sortOrder: 'asc' } }),
+        prisma.latestNews.findMany({ orderBy: { createdAt: 'desc' } }),
+        prisma.appVersion.findFirst({ orderBy: { updatedAt: 'desc' } }),
+      ]);
+
+      return NextResponse.json({
+        success: true,
+        data: { dictionary, documents, banners, news, appVersion },
+      });
+    }
+
+    if (type === 'logs') {
+      const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+      const limit = Math.min(Math.max(1, parseInt(searchParams.get('limit') || '20')), 100);
+      const skip = (page - 1) * limit;
+      const logType = searchParams.get('logType') || 'api';
+
+      let total = 0;
+      let logs: unknown[] = [];
+
+      if (logType === 'api') {
+        [logs, total] = await Promise.all([
+          prisma.apiLog.findMany({ orderBy: { createdAt: 'desc' }, skip, take: limit }),
+          prisma.apiLog.count(),
+        ]);
+      } else if (logType === 'error') {
+        [logs, total] = await Promise.all([
+          prisma.errorLog.findMany({ orderBy: { createdAt: 'desc' }, skip, take: limit }),
+          prisma.errorLog.count(),
+        ]);
+      } else if (logType === 'rate-limit') {
+        const [rateLimited, count] = await Promise.all([
+          prisma.rateLimit.findMany({ where: { count: { gte: MAX_ATTEMPTS } }, orderBy: { windowStart: 'desc' }, skip, take: limit }),
+          prisma.rateLimit.count({ where: { count: { gte: MAX_ATTEMPTS } } }),
+        ]);
+        return NextResponse.json({
+          success: true,
+          data: rateLimited,
+          total: count,
+          page,
+          totalPages: Math.ceil(count / limit),
+        });
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: logs,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+      });
+    }
+
+    if (type === 'reports') {
+      const now = new Date();
+      const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      const [newUsersByDay, calculationsByDay, revenueByDay] = await Promise.all([
+        prisma.user.groupBy({ by: ['createdAt'], where: { createdAt: { gte: monthAgo } }, _count: { id: true } }),
+        prisma.calculation.groupBy({ by: ['createdAt'], where: { createdAt: { gte: monthAgo } }, _count: { id: true } }),
+        prisma.subscription.groupBy({ by: ['createdAt'], where: { status: 'completed', createdAt: { gte: monthAgo } }, _sum: { amount: true } }),
+      ]);
+
+      const formatByDay = (data: { createdAt: Date }[], key: string = '_count') => {
+        const map: Record<string, number> = {};
+        data.forEach((d: { createdAt: Date }) => {
+          const date = d.createdAt.toISOString().split('T')[0];
+          map[date] = (map[date] || 0) + (key === '_count' ? (d as unknown as { _count: { id: number } })._count.id : Number((d as unknown as { _sum: { amount: { toNumber: () => number } } })._sum.amount?.toNumber() || 0));
+        });
+        return Object.entries(map).map(([date, count]) => ({ date, count }));
+      };
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          newUsersByDay: formatByDay(newUsersByDay),
+          calculationsByDay: formatByDay(calculationsByDay),
+          revenueByDay: formatByDay(revenueByDay, 'amount'),
+        },
+      });
+    }
+
+    return NextResponse.json({ success: false, message: 'Invalid type' }, { status: 400 });
+
+  } catch (error) {
+    console.error('Admin Analytics API error:', error);
+    return NextResponse.json({ success: false, message: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const clientIp = getClientIp(request);
+    const rateLimitCheck = await checkRateLimit(`admin-analytics:post:${clientIp}`);
+    if (!rateLimitCheck) {
+      return NextResponse.json({ success: false, message: 'Too many requests' }, { status: 429 });
+    }
+
+    if (!(await verifyAdmin(request))) {
+      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { action } = body;
+
+    if (action === 'broadcast') {
+      const { title, message, targetType, targetDate, minUsage } = body;
+      const sanitizedTitle = sanitizeString(title, 255);
+      const sanitizedMessage = sanitizeString(message, 1000);
+
+      let whereClause: Record<string, unknown> = {};
+      if (targetType === 'subscribed') whereClause.isSubscribed = true;
+      else if (targetType === 'free') whereClause.isSubscribed = false;
+
+      const users = await prisma.user.findMany({ where: whereClause, select: { id: true } });
+      
+      if (users.length === 0) {
+        return NextResponse.json({ success: false, message: 'No users found for broadcast' }, { status: 400 });
+      }
+
+      const notifications = await prisma.notification.createMany({
+        data: users.map(user => ({
+          userId: user.id,
+          title: sanitizedTitle,
+          message: sanitizedMessage,
+          type: 'broadcast',
+        })),
+      });
+
+      return NextResponse.json({ success: true, data: { count: notifications.count } });
+    }
+
+    if (action === 'schedule-notification') {
+      const { title, message, targetType, scheduledAt, targetDate, minUsage } = body;
+      const scheduled = await prisma.scheduledNotification.create({
+        data: {
+          title: sanitizeString(title, 255),
+          message: sanitizeString(message, 1000),
+          targetType: targetType || 'all',
+          targetDate,
+          minUsage,
+          scheduledAt: new Date(scheduledAt),
+        },
+      });
+      return NextResponse.json({ success: true, data: scheduled });
+    }
+
+    if (action === 'save-template') {
+      const { name, title, message, type, templateId } = body;
+      if (templateId) {
+        const updated = await prisma.notificationTemplate.update({
+          where: { id: templateId },
+          data: { name, title, message, type },
+        });
+        return NextResponse.json({ success: true, data: updated });
+      }
+      const template = await prisma.notificationTemplate.create({
+        data: { name, title, message, type: type || 'info' },
+      });
+      return NextResponse.json({ success: true, data: template });
+    }
+
+    if (action === 'delete-template') {
+      const { templateId } = body;
+      await prisma.notificationTemplate.delete({ where: { id: templateId } });
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'add-dictionary') {
+      const { term, definition, category } = body;
+      const entry = await prisma.legalDictionary.create({
+        data: { term, definition, category },
+      });
+      return NextResponse.json({ success: true, data: entry });
+    }
+
+    if (action === 'update-dictionary') {
+      const { termId, term, definition, category } = body;
+      const updated = await prisma.legalDictionary.update({
+        where: { id: termId },
+        data: { term, definition, category },
+      });
+      return NextResponse.json({ success: true, data: updated });
+    }
+
+    if (action === 'delete-dictionary') {
+      const { termId } = body;
+      await prisma.legalDictionary.delete({ where: { id: termId } });
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'add-document') {
+      const { title, description, fileUrl, category } = body;
+      const doc = await prisma.wsDocument.create({
+        data: { title, description, fileUrl, category },
+      });
+      return NextResponse.json({ success: true, data: doc });
+    }
+
+    if (action === 'delete-document') {
+      const { docId } = body;
+      await prisma.wsDocument.delete({ where: { id: docId } });
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'update-banner') {
+      const { bannerId, title, image, link, isActive, sortOrder } = body;
+      if (bannerId) {
+        const updated = await prisma.banner.update({
+          where: { id: bannerId },
+          data: { title, image, link, isActive, sortOrder },
+        });
+        return NextResponse.json({ success: true, data: updated });
+      }
+      const banner = await prisma.banner.create({
+        data: { title, image, link, isActive: isActive ?? true, sortOrder: sortOrder ?? 0 },
+      });
+      return NextResponse.json({ success: true, data: banner });
+    }
+
+    if (action === 'delete-banner') {
+      const { bannerId } = body;
+      await prisma.banner.delete({ where: { id: bannerId } });
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'add-news') {
+      const { news: newsContent } = body;
+      const entry = await prisma.latestNews.create({
+        data: { news: newsContent },
+      });
+      return NextResponse.json({ success: true, data: entry });
+    }
+
+    if (action === 'delete-news') {
+      const { newsId } = body;
+      await prisma.latestNews.delete({ where: { id: newsId } });
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'update-app-version') {
+      const { version, minVersion, forceUpdate, playstoreUrl, paymentKey, paymentPrice, paymentImg, paymentAllowDays, deathCount, injuriesCount } = body;
+      const appVersion = await prisma.appVersion.create({
+        data: { version, minVersion, forceUpdate, playstoreUrl, paymentKey, paymentPrice, paymentImg, paymentAllowDays, deathCount, injuriesCount },
+      });
+      return NextResponse.json({ success: true, data: appVersion });
+    }
+
+    if (action === 'user-action') {
+      const { userId, action: userAction } = body;
+      if (userAction === 'deactivate') {
+        await prisma.user.update({ where: { id: userId }, data: { isActive: false } });
+      } else if (userAction === 'activate') {
+        await prisma.user.update({ where: { id: userId }, data: { isActive: true } });
+      } else if (userAction === 'subscribe') {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        const endDate = new Date();
+        endDate.setDate(endDate.getDate() + 30);
+        await prisma.user.update({
+          where: { id: userId },
+          data: { isSubscribed: true, subscriptionExpiry: endDate },
+        });
+        await prisma.subscription.create({
+          data: { userId, plan: 'monthly', amount: 99, status: 'completed', startDate: new Date(), endDate },
+        });
+      } else if (userAction === 'unsubscribe') {
+        await prisma.user.update({ where: { id: userId }, data: { isSubscribed: false, subscriptionExpiry: null } });
+      }
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'bulk-action') {
+      const { userIds, action: bulkAction } = body;
+      if (bulkAction === 'export') {
+        const users = await prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, name: true, phone: true, email: true, isSubscribed: true, isActive: true, createdAt: true },
+        });
+        return NextResponse.json({ success: true, data: users });
+      }
+      if (bulkAction === 'deactivate') {
+        await prisma.user.updateMany({ where: { id: { in: userIds } }, data: { isActive: false } });
+      }
+      if (bulkAction === 'activate') {
+        await prisma.user.updateMany({ where: { id: { in: userIds } }, data: { isActive: true } });
+      }
+      return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json({ success: false, message: 'Invalid action' }, { status: 400 });
+
+  } catch (error) {
+    console.error('Admin Analytics POST error:', error);
+    return NextResponse.json({ success: false, message: 'Internal server error' }, { status: 500 });
+  }
+}

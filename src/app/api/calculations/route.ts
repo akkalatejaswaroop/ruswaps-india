@@ -1,79 +1,202 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { getAgeFactor } from '@/lib/database';
+import {
+  calculateMVA, calculateEC, calculateDisability, calculateIncomeTax, calculateHitRun,
+  validateAndParseCalculation,
+  MVAInput, ECInput, DisabilityInput, IncomeTaxInput, HitRunInput,
+} from '@/lib/calculations';
+import { checkRateLimit, getRateLimitHeaders } from '@/lib/rate-limit';
+import { logger } from '@/lib/logger';
+import { verifyAccessToken } from '@/lib/auth-helpers';
+import { randomBytes } from 'crypto';
 
-function getAuthUser(request: NextRequest): { userId: string } | null {
-  const userId = request.headers.get('x-user-id');
-  if (!userId) return null;
-  return { userId };
+function generateVerificationId(): string {
+  return randomBytes(6).toString('hex').toUpperCase();
 }
+
+const TRUSTED_PROXIES = (process.env.TRUSTED_PROXIES || '127.0.0.1,::1').split(',').map(p => p.trim());
+
+function isTrustedProxy(ip: string): boolean {
+  return TRUSTED_PROXIES.includes(ip);
+}
+
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    const ips = forwardedFor.split(',').map(ip => ip.trim());
+    for (const ip of ips) {
+      if (!isTrustedProxy(ip)) {
+        return ip;
+      }
+    }
+  }
+
+  const realIp = request.headers.get('x-real-ip');
+  if (realIp && !isTrustedProxy(realIp)) {
+    return realIp;
+  }
+
+  return '127.0.0.1';
+}
+
+const ALLOWED_CALCULATION_TYPES = ['mva', 'ec', 'disability', 'income-tax', 'hit-run'] as const;
+type CalculationType = typeof ALLOWED_CALCULATION_TYPES[number];
 
 export async function POST(request: NextRequest) {
   try {
-    const user = getAuthUser(request);
-    if (!user) {
-      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+    const authResult = await verifyAccessToken(request);
+    if (!authResult.success) {
+      return authResult.response!;
+    }
+    const user = authResult.user!;
+
+    const clientIp = getClientIp(request);
+    const rateLimitResult = await checkRateLimit(`calc:post:${clientIp}`, 'calculation');
+
+    const rateLimitHeaders = getRateLimitHeaders(rateLimitResult);
+
+    if (!rateLimitResult.success) {
+      return NextResponse.json(
+        { success: false, message: 'Too many requests. Please try again later.' },
+        { status: 429, headers: rateLimitHeaders }
+      );
     }
 
     const body = await request.json();
     const { type, data } = body;
 
     if (!type || !data) {
-      return NextResponse.json({ success: false, message: 'Type and data are required' }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Type and data are required' }, { status: 400, headers: rateLimitHeaders });
     }
 
-    let result: any;
-
-    switch (type) {
-      case 'mva':
-        result = calculateMVA(data);
-        break;
-      case 'ec':
-        result = calculateEC(data);
-        break;
-      case 'disability':
-        result = calculateDisability(data);
-        break;
-      case 'income-tax':
-        result = calculateIncomeTax(data);
-        break;
-      case 'hit-run':
-        result = calculateHitRun(data);
-        break;
-      default:
-        return NextResponse.json({ success: false, message: 'Invalid calculation type' }, { status: 400 });
+    if (!ALLOWED_CALCULATION_TYPES.includes(type as CalculationType)) {
+      return NextResponse.json({ success: false, message: 'Invalid calculation type' }, { status: 400, headers: rateLimitHeaders });
     }
 
-    const calculation = await prisma.calculation.create({
-      data: {
-        userId: user.userId,
-        type,
-        inputData: data,
-        resultData: result,
-      },
+    const validation = validateAndParseCalculation(type, data);
+    if (!validation.success) {
+      return NextResponse.json(
+        { success: false, message: validation.error || 'Invalid input data' },
+        { status: 400, headers: rateLimitHeaders }
+      );
+    }
+
+    let result;
+    const startTime = Date.now();
+
+    try {
+      switch (type) {
+        case 'mva':
+          result = calculateMVA(validation.data as MVAInput);
+          break;
+        case 'ec':
+          result = calculateEC(validation.data as ECInput);
+          break;
+        case 'disability':
+          result = calculateDisability(validation.data as DisabilityInput);
+          break;
+        case 'income-tax':
+          result = calculateIncomeTax(validation.data as IncomeTaxInput);
+          break;
+        case 'hit-run':
+          result = calculateHitRun(validation.data as HitRunInput);
+          break;
+        default:
+          return NextResponse.json({ success: false, message: 'Invalid calculation type' }, { status: 400, headers: rateLimitHeaders });
+      }
+    } catch (calcError) {
+      logger.error('Calculation execution failed', calcError, { userId: user.userId, calculationType: type });
+      return NextResponse.json({ success: false, message: 'Calculation failed' }, { status: 500, headers: rateLimitHeaders });
+    }
+
+    const calculationDuration = Date.now() - startTime;
+    logger.performance(`calculation:${type}`, calculationDuration, { userId: user.userId });
+
+    const userDetails = await prisma.user.findUnique({
+      where: { id: user.userId },
+      select: { isSubscribed: true }
     });
 
-    return NextResponse.json({ success: true, data: result });
+    const isSubscribed = userDetails?.isSubscribed ?? false;
+    const verificationId = isSubscribed ? `RUN-${type.toUpperCase()}-${generateVerificationId()}` : null;
+
+    try {
+      const savedCalc = await prisma.calculation.create({
+        data: {
+          userId: user.userId,
+          type,
+          inputData: validation.data as object,
+          resultData: result as object,
+          verificationId,
+          isVerified: isSubscribed,
+        },
+      });
+      
+      if (isSubscribed) {
+        // @ts-ignore
+        result.verificationId = verificationId;
+        // @ts-ignore
+        result.isVerified = true;
+        // @ts-ignore
+        result.calcId = savedCalc.id;
+      }
+    } catch (dbError) {
+      logger.error('Failed to save calculation to database', dbError, { userId: user.userId, calculationType: type });
+    }
+
+    return NextResponse.json({ success: true, data: result }, { headers: rateLimitHeaders });
 
   } catch (error) {
-    console.error('Calculation error:', error);
-    return NextResponse.json({ success: false, message: 'Calculation failed' }, { status: 500 });
+    logger.error('Calculation route error', error);
+    return NextResponse.json({ success: false, message: 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
-    const user = getAuthUser(request);
-    if (!user) {
-      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+    const authResult = await verifyAccessToken(request);
+    if (!authResult.success) {
+      return authResult.response!;
+    }
+    const user = authResult.user!;
+
+    const clientIp = getClientIp(request);
+    const rateLimitResult = await checkRateLimit(`calc:get:${clientIp}`, 'api');
+
+    const rateLimitHeaders = getRateLimitHeaders(rateLimitResult);
+
+    if (!rateLimitResult.success) {
+      return NextResponse.json(
+        { success: false, message: 'Too many requests. Please try again later.' },
+        { status: 429, headers: rateLimitHeaders }
+      );
     }
 
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get('limit') || '50');
-    const type = searchParams.get('type');
+    let limit = parseInt(searchParams.get('limit') || '50');
+    limit = Math.min(Math.max(limit, 1), 100);
 
-    const where: any = { userId: user.userId };
-    if (type) where.type = type;
+    const type = searchParams.get('type');
+    const search = searchParams.get('search');
+    const startDate = searchParams.get('startDate');
+    const endDate = searchParams.get('endDate');
+
+    const where: Prisma.CalculationWhereInput = { userId: user.userId };
+
+    if (type && ALLOWED_CALCULATION_TYPES.includes(type as CalculationType)) {
+      where.type = type;
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt.gte = new Date(startDate);
+      }
+      if (endDate) {
+        where.createdAt.lte = new Date(endDate);
+      }
+    }
 
     const calculations = await prisma.calculation.findMany({
       where,
@@ -81,131 +204,67 @@ export async function GET(request: NextRequest) {
       take: limit,
     });
 
-    return NextResponse.json({ success: true, data: calculations });
+    const total = await prisma.calculation.count({ where });
+
+    return NextResponse.json({
+      success: true,
+      data: calculations,
+      pagination: {
+        total,
+        limit,
+        hasMore: calculations.length === limit,
+      }
+    }, { headers: rateLimitHeaders });
 
   } catch (error) {
-    console.error('Get calculations error:', error);
+    logger.error('Get calculations route error', error);
     return NextResponse.json({ success: false, message: 'Internal server error' }, { status: 500 });
   }
 }
 
-function calculateMVA(data: any) {
-  const { claimType, age, monthlyIncome, dependents, disabilityPercentage, otherExpenses, interestRate, days } = data;
-  const ageFactor = getAgeFactor(age);
+export async function DELETE(request: NextRequest) {
+  try {
+    const authResult = await verifyAccessToken(request);
+    if (!authResult.success) {
+      return authResult.response!;
+    }
+    const user = authResult.user!;
 
-  let lossOfDependency = 0;
-  let funeralExpenses = 0;
+    const clientIp = getClientIp(request);
+    const rateLimitResult = await checkRateLimit(`calc:delete:${clientIp}`, 'calculation');
 
-  if (claimType === 'fatal') {
-    lossOfDependency = Math.round((monthlyIncome * 50 / 100) * 12 * ageFactor);
-    funeralExpenses = 20000;
-  } else {
-    const disabilityDecimal = (disabilityPercentage || 0) / 100;
-    lossOfDependency = Math.round((monthlyIncome * 60 / 100) * disabilityDecimal * 12 * ageFactor);
+    const rateLimitHeaders = getRateLimitHeaders(rateLimitResult);
+
+    if (!rateLimitResult.success) {
+      return NextResponse.json(
+        { success: false, message: 'Too many requests. Please try again later.' },
+        { status: 429, headers: rateLimitHeaders }
+      );
+    }
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json({ success: false, message: 'Calculation ID is required' }, { status: 400, headers: rateLimitHeaders });
+    }
+
+    const calculation = await prisma.calculation.findFirst({
+      where: { id, userId: user.userId },
+    });
+
+    if (!calculation) {
+      return NextResponse.json({ success: false, message: 'Calculation not found' }, { status: 404, headers: rateLimitHeaders });
+    }
+
+    await prisma.calculation.delete({ where: { id } });
+
+    logger.info('Calculation deleted', { userId: user.userId, calculationId: id });
+
+    return NextResponse.json({ success: true, message: 'Calculation deleted' }, { headers: rateLimitHeaders });
+
+  } catch (error) {
+    logger.error('Delete calculation route error', error);
+    return NextResponse.json({ success: false, message: 'Internal server error' }, { status: 500 });
   }
-
-  const totalCompensation = lossOfDependency + (otherExpenses || 0) + funeralExpenses;
-  const interestAmount = Math.round(((totalCompensation * interestRate) / 100) * (days / 365));
-  const totalWithInterest = totalCompensation + interestAmount;
-
-  return {
-    type: claimType === 'fatal' ? 'Fatal' : 'Non-Fatal',
-    ageFactor,
-    lossOfDependency,
-    funeralExpenses,
-    otherExpenses: otherExpenses || 0,
-    totalCompensation,
-    interestRate,
-    interestAmount,
-    totalWithInterest,
-  };
-}
-
-function calculateEC(data: any) {
-  const { claimType, age, monthlyWages, disabilityPercentage, otherExpenses, interestRate, days } = data;
-  const ageFactor = getAgeFactor(age);
-
-  let lossOfFutureIncome = 0;
-
-  if (claimType === 'fatal') {
-    lossOfFutureIncome = Math.round((monthlyWages * 50 / 100) * 12 * ageFactor);
-  } else {
-    const disabilityDecimal = (disabilityPercentage || 0) / 100;
-    lossOfFutureIncome = Math.round((monthlyWages * 60 / 100) * disabilityDecimal * ageFactor * 12);
-  }
-
-  const totalCompensation = lossOfFutureIncome + (otherExpenses || 0);
-  const interestAmount = Math.round(((totalCompensation * interestRate) / 100) * (days / 365));
-  const totalWithInterest = totalCompensation + interestAmount;
-
-  return {
-    type: claimType === 'fatal' ? 'Fatal' : 'Non-Fatal',
-    ageFactor,
-    lossOfFutureIncome,
-    otherExpenses: otherExpenses || 0,
-    totalCompensation,
-    interestRate,
-    interestAmount,
-    totalWithInterest,
-  };
-}
-
-function calculateDisability(data: any) {
-  const { type, percentage, side } = data;
-
-  let regionalDisability = percentage || 0;
-  
-  if (side === 'both') {
-    regionalDisability = Math.min(100, regionalDisability * 1.5);
-  }
-
-  const wholeBodyDisability = Math.round(regionalDisability * 0.7);
-
-  return {
-    type,
-    side: side || 'single',
-    regionalDisability: Math.round(regionalDisability),
-    wholeBodyDisability,
-  };
-}
-
-function calculateIncomeTax(data: any) {
-  const { awardAmount, interestRate, days, hasPAN } = data;
-
-  const interestAmount = (awardAmount * interestRate * days) / (100 * 365);
-
-  let tdsRate = 0;
-  if (hasPAN) {
-    tdsRate = interestAmount > 10000 ? 10 : 0;
-  } else {
-    tdsRate = 20;
-  }
-
-  const tdsAmount = interestAmount * (tdsRate / 100);
-  const netPayable = interestAmount - tdsAmount;
-
-  return {
-    awardAmount,
-    interestRate,
-    days,
-    grossInterest: Math.round(interestAmount),
-    tdsRate,
-    tdsAmount: Math.round(tdsAmount),
-    netPayable: Math.round(netPayable),
-    hasPAN,
-  };
-}
-
-function calculateHitRun(data: any) {
-  const { deathCount, driverIdentified } = data;
-
-  const perCaseAmount = driverIdentified ? 500000 : 250000;
-  const totalCompensation = perCaseAmount * (deathCount || 1);
-
-  return {
-    deathCount: deathCount || 1,
-    driverStatus: driverIdentified ? 'Identified' : 'Untraced',
-    perCaseAmount,
-    totalCompensation,
-  };
 }

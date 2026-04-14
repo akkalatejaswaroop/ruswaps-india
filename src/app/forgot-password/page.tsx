@@ -1,5 +1,5 @@
 "use client";
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
@@ -7,12 +7,21 @@ import { Eye, EyeOff, Mail, Lock, ArrowLeft, KeyRound } from 'lucide-react';
 
 export default function ForgotPassword() {
   const router = useRouter();
-  const [step, setStep] = useState<1 | 2>(1); // 1: Email, 2: OTP & New Password
+  const [step, setStep] = useState<1 | 2>(1);
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({ email: '', otp: '', password: '' });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +67,10 @@ export default function ForgotPassword() {
 
       if (data.success) {
         setSuccess('Password reset successfully. Redirecting to login...');
-        setTimeout(() => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        timeoutRef.current = setTimeout(() => {
           router.push('/login');
         }, 2000);
       } else {
@@ -126,16 +138,18 @@ export default function ForgotPassword() {
           ) : (
             <form onSubmit={handleResetPassword} className="space-y-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">OTP Received</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">OTP Received (6 digits)</label>
                 <div className="relative">
                   <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                   <input
                     type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={formData.otp}
-                    onChange={(e) => setFormData({...formData, otp: e.target.value.replace(/\D/g, '').slice(0, 4)})}
+                    onChange={(e) => setFormData({...formData, otp: e.target.value.replace(/\D/g, '').slice(0, 6)})}
                     className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent text-center tracking-widest text-lg font-bold"
-                    placeholder="• • • •"
-                    maxLength={4}
+                    placeholder="• • • • • •"
+                    maxLength={6}
                     required
                   />
                 </div>
@@ -157,6 +171,7 @@ export default function ForgotPassword() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                     className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                   >
                     {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}

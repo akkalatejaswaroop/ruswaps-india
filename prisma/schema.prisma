@@ -8,26 +8,48 @@ datasource db {
 }
 
 model User {
-  id               String         @id @default(cuid())
-  phone            String         @unique
-  email            String?        @unique
-  name             String
-  password         String
-  role             String         @default("USER")
-  playerId         String?
-  isActive         Boolean        @default(true)
-  isSubscribed     Boolean        @default(false)
-  subscriptionExpiry DateTime?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  id                  String         @id @default(cuid())
+  phone               String         @unique
+  email               String?        @unique
+  name                String
+  password            String
+  role                String         @default("USER")
+  playerId            String?
+  isActive            Boolean        @default(true)
+  isSubscribed        Boolean        @default(false)
+  subscriptionExpiry  DateTime?
+  lastPasswordChange   DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
   
-  subscriptions    Subscription[]
-  cases            Case[]
-  calculations     Calculation[]
-  notifications    Notification[]
-  otps             Otp[]
+  subscriptions       Subscription[]
+  cases               Case[]
+  calculations        Calculation[]
+  notifications       Notification[]
+  otps                Otp[]
+  caseWatches         CaseWatch[]
+  courtNotifications  CourtNotification[]
+  apCaseWatches       APCaseWatch[]
+  apNotifications     APCourtNotification[]
+  revenueEntries      RevenueEntry[]
   
   @@map("users")
+}
+
+model RevenueEntry {
+  id          String   @id @default(cuid())
+  userId      String
+  caseName    String
+  amount      Decimal  @db.Decimal(10, 2)
+  type        String   @default("legal-fee") // legal-fee, settlement, commission
+  date        DateTime @default(now())
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("revenue_entries")
 }
 
 model Subscription {
@@ -68,12 +90,14 @@ model Case {
 model Calculation {
   id         String   @id @default(cuid())
   userId     String
-  type       String   // mva, ec, disability, income-tax, hit-run
-  inputData  Json
-  resultData Json
-  createdAt  DateTime @default(now())
+  type           String   // mva, ec, disability, income-tax, hit-run
+  inputData      Json
+  resultData     Json
+  verificationId String?  @unique
+  isVerified     Boolean  @default(false)
+  createdAt      DateTime @default(now())
   
-  user       User     @relation(fields: [userId], references: [id])
+  user           User     @relation(fields: [userId], references: [id])
   
   @@map("calculations")
 }
@@ -189,4 +213,246 @@ model WsDocument {
   category    String?
   
   @@map("ws_documents")
+}
+
+model CourtCase {
+  id                String       @id @default(cuid())
+  cnrNumber         String       @unique
+  caseNumber        String
+  caseType          String
+  filingDate        DateTime?
+  registrationDate  DateTime?
+  status           String
+  nextHearingDate   DateTime?
+  lastHearingDate   DateTime?
+  petitioner       String
+  respondent       String
+  advocate         String?
+  judge            String?
+  actSection       String?
+  court            String
+  state            String
+  district         String
+  taluka            String?
+  establishmentCode String?
+  courtCode        String?
+  rawData           Json
+  syncedAt          DateTime
+  changedAt         DateTime
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  
+  watches           CaseWatch[]
+  orderHistory      CaseOrder[]
+  notifications    CourtNotification[]
+  
+  @@map("court_cases")
+}
+
+model CaseWatch {
+  id              String     @id @default(cuid())
+  userId          String
+  courtCaseId     String
+  notifyOnChange  Boolean    @default(true)
+  notifyDaysBefore Int       @default(1)
+  createdAt       DateTime   @default(now())
+  
+  user            User       @relation(fields: [userId], references: [id])
+  courtCase       CourtCase  @relation(fields: [courtCaseId], references: [id])
+  
+  @@unique([userId, courtCaseId])
+  @@map("case_watches")
+}
+
+model CaseOrder {
+  id           String     @id @default(cuid())
+  courtCaseId  String
+  hearingDate DateTime
+  purpose     String?
+  nextDate     DateTime?
+  order       String?
+  createdAt   DateTime   @default(now())
+  
+  courtCase   CourtCase  @relation(fields: [courtCaseId], references: [id])
+  
+  @@map("case_orders")
+}
+
+model SyncLog {
+  id            String    @id @default(cuid())
+  startedAt     DateTime
+  completedAt   DateTime?
+  status        String
+  totalFetched  Int       @default(0)
+  totalUpdated Int       @default(0)
+  totalSkipped Int       @default(0)
+  totalErrors  Int       @default(0)
+  errorDetails Json?
+  triggeredBy  String
+  createdAt    DateTime   @default(now())
+  
+  @@map("sync_logs")
+}
+
+model CourtNotification {
+  id          String     @id @default(cuid())
+  userId      String
+  courtCaseId String
+  type        String
+  message     String
+  isRead      Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  
+  user        User       @relation(fields: [userId], references: [id])
+  courtCase   CourtCase  @relation(fields: [courtCaseId], references: [id])
+  
+  @@map("court_notifications")
+}
+
+model RateLimit {
+  key        String   @id
+  count     Int      @default(0)
+  windowStart DateTime @default(now())
+  expiresAt DateTime?
+
+  @@map("rate_limits")
+}
+
+model ApiLog {
+  id        String   @id @default(cuid())
+  endpoint String
+  method   String
+  status   Int?
+  duration Int?
+  userId   String?
+  createdAt DateTime @default(now())
+
+  @@map("api_logs")
+}
+
+model ErrorLog {
+  id        String   @id @default(cuid())
+  endpoint String
+  error    String
+  stack    String?
+  userId   String?
+  createdAt DateTime @default(now())
+
+  @@map("error_logs")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  entity      String?
+  entityId    String?
+  details     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model APCourtCase {
+  id                String       @id @default(cuid())
+  cnrNumber         String       @unique
+  caseNumber        String
+  caseType          String
+  filingDate        DateTime?
+  registrationDate  DateTime?
+  status            String
+  nextHearingDate   DateTime?
+  lastHearingDate   DateTime?
+  petitioner        String
+  respondent        String
+  advocate          String?
+  judge             String?
+  actSection        String?
+  stateCode         String       @default("28")
+  stateName         String       @default("Andhra Pradesh")
+  districtCode      String
+  districtName      String
+  mandalCode        String?
+  mandalName        String?
+  courtCode         String?
+  courtName         String?
+  establishmentCode String?
+  rawData           Json
+  syncedAt          DateTime
+  changedAt         DateTime
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  
+  watches           APCaseWatch[]
+  hearingHistory    APCaseHearing[]
+  notifications     APCourtNotification[]
+  
+  @@index([districtCode])
+  @@index([mandalCode])
+  @@index([status])
+  @@index([nextHearingDate])
+  @@map("court_cases_ap")
+}
+
+model APCaseWatch {
+  id               String     @id @default(cuid())
+  userId           String
+  courtCaseId      String
+  notifyDaysBefore Int        @default(1)
+  createdAt        DateTime   @default(now())
+  
+  user             User       @relation(fields: [userId], references: [id])
+  courtCase        APCourtCase @relation(fields: [courtCaseId], references: [id])
+  
+  @@unique([userId, courtCaseId])
+  @@map("case_watches_ap")
+}
+
+model APCaseHearing {
+  id              String      @id @default(cuid())
+  courtCaseId     String
+  hearingDate     DateTime
+  purpose         String?
+  nextDate        DateTime?
+  orderRemarks    String?
+  createdAt       DateTime    @default(now())
+  
+  courtCase       APCourtCase @relation(fields: [courtCaseId], references: [id])
+  
+  @@map("case_hearings_ap")
+}
+
+model APSyncLog {
+  id            String    @id @default(cuid())
+  stateCode     String    @default("28")
+  startedAt     DateTime
+  completedAt   DateTime?
+  status        String
+  totalFetched  Int       @default(0)
+  totalUpdated  Int       @default(0)
+  totalSkipped  Int       @default(0)
+  totalErrors   Int       @default(0)
+  errorDetails  Json?
+  triggeredBy   String
+  createdAt     DateTime  @default(now())
+  
+  @@map("sync_logs_ap")
+}
+
+model APCourtNotification {
+  id          String      @id @default(cuid())
+  userId      String
+  courtCaseId String
+  type        String
+  message     String
+  isRead      Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  
+  user        User        @relation(fields: [userId], references: [id])
+  courtCase   APCourtCase @relation(fields: [courtCaseId], references: [id])
+  
+  @@index([userId, isRead])
+  @@map("court_notifications_ap")
 }

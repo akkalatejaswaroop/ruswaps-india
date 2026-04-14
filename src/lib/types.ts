@@ -1,16 +1,14 @@
-// Type definitions for Ruswaps Web Application
-
 export interface User {
   id: string;
   phone: string;
-  email: string;
+  email: string | null;
   name: string;
   password: string;
   isActive: boolean;
   isSubscribed: boolean;
-  subscriptionExpiry?: string;
-  createdAt: string;
-  updatedAt: string;
+  subscriptionExpiry: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface AuthResponse {
@@ -26,73 +24,34 @@ export interface Case {
   caseNo: string;
   caseYear: number;
   caseType: string;
-  courtName: string;
-  hearingDate?: string;
-  postedFor?: string;
-  status: 'pending' | 'next_hearing' | 'disposed';
-  createdAt: string;
-  updatedAt: string;
+  courtName: string | null;
+  hearingDate: Date | null;
+  postedFor: string | null;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-export interface MVADetails {
-  claimType: 'fatal' | 'non-fatal';
-  claimantType?: 'married' | 'bachelor' | 'minor';
-  caseNo: string;
-  caseYear: number;
-  courtName: string;
-  age: number;
-  monthlyIncome: number;
-  dependents?: number;
-  disabilityPercentage?: number;
-  otherExpenses: number;
-  interestRate: number;
-  days: number;
-}
-
-export interface ECDetails {
-  claimType: 'fatal' | 'non-fatal';
-  caseNo: string;
-  caseYear: number;
-  courtName: string;
-  age: number;
-  monthlyWages: number;
-  disabilityPercentage?: number;
-  otherExpenses: number;
-  interestRate: number;
-  days: number;
-}
-
-export interface DisabilityDetails {
-  type: 'locomotor' | 'amputation' | 'ptd' | 'ppd';
-  extremityType?: 'upper' | 'lower' | 'spine';
-  subType?: string;
-  impairment?: number;
-  level?: string;
-  side?: 'right' | 'left' | 'both';
-  percentage?: number;
-}
-
-export interface CalculationResult {
+export interface Calculation {
+  id: string;
+  userId: string;
   type: string;
-  totalCompensation: number;
-  interestAmount: number;
-  totalWithInterest: number;
-  breakdown: Record<string, number>;
-  pdfUrl?: string;
-  createdAt: string;
+  inputData: Record<string, unknown>;
+  resultData: Record<string, unknown>;
+  createdAt: Date;
 }
 
 export interface Subscription {
   id: string;
   userId: string;
-  plan: 'monthly' | 'annual';
+  plan: string;
   amount: number;
-  paymentId?: string;
-  orderId?: string;
-  status: 'pending' | 'completed' | 'failed';
-  startDate: string;
-  endDate: string;
-  createdAt: string;
+  paymentId: string | null;
+  orderId: string | null;
+  status: string;
+  startDate: Date;
+  endDate: Date;
+  createdAt: Date;
 }
 
 export interface Notification {
@@ -100,56 +59,44 @@ export interface Notification {
   userId: string;
   title: string;
   message: string;
-  type: 'info' | 'warning' | 'success' | 'error';
+  type: string;
   isRead: boolean;
-  data?: Record<string, any>;
-  createdAt: string;
+  data: Record<string, unknown> | null;
+  createdAt: Date;
 }
 
 export interface AppVersion {
+  id: string;
   version: string;
-  minVersion: string;
+  minVersion: string | null;
   forceUpdate: boolean;
-  playstoreUrl: string;
+  playstoreUrl: string | null;
+  paymentKey: string | null;
   paymentPrice: number;
+  paymentImg: string | null;
   paymentAllowDays: number;
   deathCount: number;
   injuriesCount: number;
-}
-
-export interface AgeFactor {
-  minAge: number;
-  maxAge: number;
-  factor: number;
-}
-
-export interface LegalDocument {
-  id: string;
-  title: string;
-  type: 'vakalatnama' | 'dictionary' | 'provision' | 'act';
-  content: string;
-  category: string;
-  createdAt: string;
+  updatedAt: Date;
 }
 
 export interface Banner {
   id: string;
-  title: string;
-  image: string;
-  link?: string;
+  title: string | null;
+  image: string | null;
+  link: string | null;
   isActive: boolean;
-  order: number;
+  sortOrder: number;
 }
 
 export interface News {
   id: string;
-  title: string;
-  message: string;
+  news: string;
   isActive: boolean;
-  createdAt: string;
+  createdAt: Date;
 }
 
-export interface APIResponse<T = any> {
+export interface APIResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
@@ -162,4 +109,37 @@ export interface PaginatedResponse<T> extends APIResponse<T[]> {
   page: number;
   limit: number;
   totalPages: number;
+}
+
+export type ClaimType = 'fatal' | 'non-fatal';
+export type ClaimantType = 'married' | 'bachelor' | 'minor';
+export type DisabilitySide = 'single' | 'both';
+export type CalculatorType = 'locomotor' | 'amputation' | 'ptd' | 'ppd';
+
+export interface LoginFormData {
+  identifier: string;
+  password: string;
+}
+
+export interface SignupFormData {
+  name: string;
+  phone: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+}
+
+export interface ForgotPasswordFormData {
+  email: string;
+}
+
+export interface OtpVerificationData {
+  phone?: string;
+  email?: string;
+  otp: string;
+}
+
+export interface ResetPasswordData {
+  password: string;
+  confirmPassword: string;
 }

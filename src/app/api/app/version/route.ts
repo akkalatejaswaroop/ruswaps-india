@@ -8,7 +8,6 @@ export async function GET() {
       minVersion: '1.0.0',
       forceUpdate: false,
       playstoreUrl: 'https://play.google.com/store/apps/details?id=io.ionic.starterMVAECClaims',
-      paymentKey: process.env.RAZORPAY_KEY_ID || '',
       paymentPrice: {
         monthly: 299,
         annual: 1999,

@@ -64,19 +64,16 @@ export default function Subscription() {
 
   useEffect(() => {
     const fetchUser = async () => {
-      const token = localStorage.getItem('accessToken');
-      if (!token) {
-        router.push('/login');
-        return;
-      }
-
       try {
         const response = await fetch(`/api/user/profile`, {
-          headers: { 'Authorization': `Bearer ${token}` },
+          credentials: 'include',
         });
         const data = await response.json();
         if (data.success) {
           setUser(data.data);
+        } else if (response.status === 401) {
+          router.push('/login');
+          return;
         }
       } catch (err) {
         console.error('Failed to fetch user:', err);
@@ -106,7 +103,7 @@ export default function Subscription() {
       features: [
         'All Calculators',
         'PDF Export',
-        'Case Direction',
+        'Case Directory',
         'Email Support'
       ]
     },
@@ -118,7 +115,7 @@ export default function Subscription() {
       features: [
         'All Calculators',
         'PDF Export',
-        'Case Direction',
+        'Case Directory',
         'Priority Support',
         'Latest Updates',
         'All Legal Documents'
@@ -128,15 +125,14 @@ export default function Subscription() {
 
   const handlePayment = async () => {
     setProcessing(true);
-    const token = localStorage.getItem('accessToken');
     
     try {
       const response = await fetch(`/api/payments/razorpay`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
+        credentials: 'include',
         body: JSON.stringify({
           amount: plans[selectedPlan].price,
           plan: selectedPlan,
@@ -158,8 +154,8 @@ export default function Subscription() {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
               },
+              credentials: 'include',
               body: JSON.stringify({
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
@@ -172,7 +168,6 @@ export default function Subscription() {
             if (verifyData.success) {
               const updatedUser = { ...user, isSubscribed: true, subscriptionExpiry: verifyData.data.subscriptionExpiry };
               setUser(updatedUser);
-              localStorage.setItem('user', JSON.stringify(updatedUser));
               alert('Payment successful! Your subscription is now active.');
             } else {
               alert('Payment verification failed. Please contact support.');

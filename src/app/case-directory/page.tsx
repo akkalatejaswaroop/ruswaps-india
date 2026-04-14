@@ -147,10 +147,10 @@ export default function CaseDirection() {
     }
   };
 
-  const openEditModal = (c: any) => {
+  const openEditModal = (c: Record<string, unknown>) => {
     setEditingCase({
       ...c,
-      hearingDate: c.hearingDate ? new Date(c.hearingDate).toISOString().split('T')[0] : ''
+      hearingDate: c.hearingDate ? new Date(c.hearingDate as string).toISOString().split('T')[0] : ''
     });
     setShowEditModal(true);
   };
@@ -228,7 +228,7 @@ export default function CaseDirection() {
                 <ArrowLeft size={24} />
               </Link>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">Case Direction</h1>
+                <h1 className="text-xl font-bold text-gray-900">Case Directory</h1>
                 <p className="text-sm text-gray-500">Manage your cases and hearings</p>
               </div>
             </div>

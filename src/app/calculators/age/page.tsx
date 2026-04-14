@@ -1,23 +1,55 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Calendar, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Calendar, RefreshCw, AlertCircle } from 'lucide-react';
 
 export default function AgeCalculator() {
   const router = useRouter();
   const [birthDate, setBirthDate] = useState('');
   const [result, setResult] = useState(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loggedIn = localStorage.getItem('isLoggedIn');
-    if (!loggedIn) {
+  const checkAuth = useCallback(async () => {
+    setAuthError(null);
+    try {
+      const res = await fetch('/api/user/profile', {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          router.push('/login');
+          return false;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Network error';
+      setAuthError(`Authentication check failed: ${message}`);
       router.push('/login');
-    } else {
-      setIsLoggedIn(true);
+      return false;
     }
   }, [router]);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white rounded-xl p-8 max-w-md w-full mx-4 shadow-lg">
+          <div className="flex items-center gap-3 text-red-600 mb-4">
+            <AlertCircle size={24} />
+            <h2 className="text-xl font-bold">Authentication Error</h2>
+          </div>
+          <p className="text-gray-600 mb-4">{authError}</p>
+          <p className="text-sm text-gray-500">Redirecting to login...</p>
+        </div>
+      </div>
+    );
+  }
 
   const calculateAge = () => {
     if (!birthDate) return;

@@ -1,30 +1,55 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { z } from 'zod';
 import {
   ArrowLeft,
   Calculator,
   Download,
-  Truck,
-  Briefcase,
   User,
-  Calendar,
-  IndianRupee,
-  ChevronDown,
-  ChevronUp,
-  RefreshCw
+  RefreshCw,
+  AlertCircle,
+  Loader2,
+  CheckCircle,
+  FileText,
 } from 'lucide-react';
+import { calculateMVA, getAgeFactor, MVAInput, MVAOutput, mvaInputSchema } from '@/lib/calculations';
+import { SavingIndicator, ProgressSteps } from '@/lib/ui';
 
+interface MVAFormData {
+  caseNo: string;
+  caseYear: number;
+  courtName: string;
+  age: number;
+  income: number;
+  dependents: number;
+  disabilityPercentage: number;
+  otherExpenses: number;
+  interestRate: number;
+  days: number;
+}
+
+interface FormErrors {
+  [key: string]: string | undefined;
+}
+
+const mvaFormSchema = z.object({
+  age: z.number().min(0, 'Age must be at least 0').max(120, 'Age must be at most 120'),
+  income: z.number().min(0, 'Income must be at least 0').max(100000000, 'Income is too high'),
+  dependents: z.number().min(0, 'Dependents cannot be negative').max(50, 'Too many dependents'),
+  disabilityPercentage: z.number().min(0, 'Percentage must be at least 0').max(100, 'Percentage cannot exceed 100'),
+  otherExpenses: z.number().min(0, 'Expenses cannot be negative'),
+  interestRate: z.number().min(0, 'Rate must be at least 0').max(100, 'Rate cannot exceed 100'),
+  days: z.number().min(1, 'Days must be at least 1').max(3650, 'Days cannot exceed 3650'),
+});
 
 export default function MVAClaimsCalculator() {
   const router = useRouter();
   const [step, setStep] = useState(1);
-  const [claimType, setClaimType] = useState('fatal'); // fatal or non-fatal
-  const [claimantType, setClaimantType] = useState('married'); // married, bachelor, minor
-  const [formData, setFormData] = useState({
+  const [claimType, setClaimType] = useState<'fatal' | 'non-fatal'>('fatal');
+  const [claimantType, setClaimantType] = useState<'married' | 'bachelor' | 'minor'>('married');
+  const [formData, setFormData] = useState<MVAFormData>({
     caseNo: '',
     caseYear: new Date().getFullYear(),
     courtName: '',
@@ -34,216 +59,133 @@ export default function MVAClaimsCalculator() {
     disabilityPercentage: 0,
     otherExpenses: 0,
     interestRate: 7,
-    days: 365
+    days: 365,
   });
-  const [result, setResult] = useState(null);
-  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [result, setResult] = useState<MVAOutput | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
+  const checkAuth = useCallback(async () => {
+    setAuthError(null);
+    try {
+      const res = await fetch('/api/user/profile', {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          router.push('/login');
+          return false;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Network error';
+      setAuthError(`Authentication check failed: ${message}`);
       router.push('/login');
+      return false;
     }
   }, [router]);
 
-  // Age factors based on Workers Compensation Act
-  const getAgeFactor = (age) => {
-    if (age <= 16) return 0.50;
-    if (age <= 22) return 0.65;
-    if (age <= 25) return 0.70;
-    if (age <= 30) return 0.80;
-    if (age <= 35) return 0.90;
-    if (age <= 40) return 0.95;
-    if (age <= 45) return 1.00;
-    if (age <= 50) return 1.10;
-    if (age <= 55) return 1.25;
-    if (age <= 60) return 1.40;
-    return 1.50;
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  const validateForm = (): boolean => {
+    try {
+      const dataToValidate = claimType === 'fatal'
+        ? { age: formData.age, income: formData.income, dependents: formData.dependents, interestRate: formData.interestRate, days: formData.days, otherExpenses: formData.otherExpenses }
+        : { age: formData.age, income: formData.income, disabilityPercentage: formData.disabilityPercentage, interestRate: formData.interestRate, days: formData.days, otherExpenses: formData.otherExpenses };
+      
+      mvaFormSchema.parse(dataToValidate);
+      setErrors({});
+      return true;
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        const newErrors: FormErrors = {};
+        const zodErrors = err as z.ZodError<Record<string, unknown>>;
+        zodErrors.issues.forEach((issue) => {
+          const field = issue.path[0];
+          if (field) {
+            newErrors[field as string] = issue.message;
+          }
+        });
+        setErrors(newErrors);
+      }
+      return false;
+    }
   };
 
   const calculateCompensation = async () => {
-    const ageFactor = getAgeFactor(formData.age);
-    
-    let calculationResult;
-    
-    if (claimType === 'fatal') {
-      let multiplier = 1;
-      if (claimantType === 'bachelor') multiplier = 0.80;
-      else if (claimantType === 'minor') multiplier = 0.75;
-      
-      const lossOfDependency = (formData.income * 50 / 100) * 12 * ageFactor * multiplier;
-      const funeralExpenses = 20000;
-      const totalCompensation = Math.round(lossOfDependency) + Math.round(formData.otherExpenses) + funeralExpenses;
-      
-      const interestAmount = Math.round(((totalCompensation * formData.interestRate) / 100) * (formData.days / 365));
-      const totalWithInterest = totalCompensation + interestAmount;
-      
-      calculationResult = {
-        type: 'Fatal',
-        lossOfDependency,
-        funeralExpenses,
-        otherExpenses: formData.otherExpenses,
-        totalCompensation,
-        interestRate: formData.interestRate,
-        interestAmount,
-        totalWithInterest,
-        ageFactor
-      };
-    } else {
-      const disabilityDecimal = formData.disabilityPercentage / 100;
-      const lossOfEarningCapacity = (formData.income * 60 / 100) * disabilityDecimal * 12 * ageFactor;
-      const totalCompensation = Math.round(lossOfEarningCapacity) + Math.round(formData.otherExpenses);
-      
-      const interestAmount = Math.round(((totalCompensation * formData.interestRate) / 100) * (formData.days / 365));
-      const totalWithInterest = totalCompensation + interestAmount;
-      
-      calculationResult = {
-        type: 'Non-Fatal',
-        disabilityPercentage: formData.disabilityPercentage,
-        lossOfEarningCapacity,
-        otherExpenses: formData.otherExpenses,
-        totalCompensation,
-        interestRate: formData.interestRate,
-        interestAmount,
-        totalWithInterest,
-        ageFactor
-      };
+    setError(null);
+
+    if (!validateForm()) {
+      return;
     }
-    
+
+    setIsLoading(true);
+    setSaveStatus('saving');
+
+    const mvaInput: MVAInput = {
+      claimType,
+      age: formData.age,
+      monthlyIncome: formData.income,
+      dependents: formData.dependents,
+      disabilityPercentage: formData.disabilityPercentage,
+      otherExpenses: formData.otherExpenses,
+      interestRate: formData.interestRate,
+      days: formData.days,
+      claimantType,
+    };
+
+    const calculationResult = calculateMVA(mvaInput);
     setResult(calculationResult);
     setStep(3);
+    setIsLoading(false);
 
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-      setSaving(true);
-      try {
-        await fetch(`/api/calculations`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
+    try {
+      const res = await fetch(`/api/calculations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          type: 'mva',
+          data: {
+            claimType,
+            claimantType,
+            age: formData.age,
+            monthlyIncome: formData.income,
+            dependents: formData.dependents,
+            disabilityPercentage: formData.disabilityPercentage,
+            otherExpenses: formData.otherExpenses,
+            interestRate: formData.interestRate,
+            days: formData.days,
           },
-          body: JSON.stringify({
-            type: 'mva',
-            data: {
-              claimType,
-              claimantType,
-              age: formData.age,
-              monthlyIncome: formData.income,
-              dependents: formData.dependents,
-              disabilityPercentage: formData.disabilityPercentage,
-              otherExpenses: formData.otherExpenses,
-              interestRate: formData.interestRate,
-              days: formData.days,
-              ...calculationResult
-            },
-          }),
-        });
-      } catch (err) {
-        console.error('Failed to save calculation:', err);
+        }),
+      });
+
+      const responseData = await res.json();
+
+      if (!res.ok || !responseData.success) {
+        setSaveStatus('error');
+      } else {
+        setSaveStatus('saved');
       }
-      setSaving(false);
+    } catch (err) {
+      console.error('Failed to save calculation to server:', err);
+      setSaveStatus('error');
+      setError('Calculation completed but could not save to server.');
     }
   };
 
   const generatePDF = () => {
-    const doc = new jsPDF();
-    
-    // Header
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text('MOTOR VEHICLE ACCIDENT CLAIMS CALCULATOR', 105, 20, { align: 'center' });
-    
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Date: ${new Date().toLocaleDateString()}`, 200, 30, { align: 'right' });
-    
-    // Case Details
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Case Details', 14, 45);
-    
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    autoTable(doc, {
-      startY: 50,
-      head: [['Case No', 'Year', 'Court Name']],
-      body: [[formData.caseNo || 'N/A', formData.caseYear, formData.courtName || 'N/A']],
-      theme: 'grid',
-      headStyles: { fillColor: [1, 124, 67] }
-    });
-    
-    // Claim Information
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Claim Information', 14, 90);
-    
-    autoTable(doc, {
-      startY: 95,
-      head: [['Claim Type', 'Claimant Status', 'Age of Deceased/Injured']],
-      body: [[claimType === 'fatal' ? 'Fatal/Death' : 'Non-Fatal/Injury', claimantType.toUpperCase(), `${formData.age} years`]],
-      theme: 'grid',
-      headStyles: { fillColor: [1, 124, 67] }
-    });
-    
-    // Financial Details
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Financial Details', 14, 125);
-    
-    const financialData = claimType === 'fatal' ? [
-      ['Monthly Income', `₹${formData.income.toLocaleString()}`],
-      ['No. of Dependents', formData.dependents.toString()],
-      ['Loss of Dependency (50%)', `₹${result?.lossOfDependency?.toLocaleString()}`],
-      ['Funeral Expenses', `₹${result?.funeralExpenses?.toLocaleString()}`],
-      ['Other Expenses', `₹${result?.otherExpenses?.toLocaleString()}`]
-    ] : [
-      ['Monthly Income', `₹${formData.income.toLocaleString()}`],
-      ['Disability Percentage', `${formData.disabilityPercentage}%`],
-      ['Loss of Earning Capacity (60%)', `₹${result?.lossOfEarningCapacity?.toLocaleString()}`],
-      ['Other Expenses', `₹${result?.otherExpenses?.toLocaleString()}`]
-    ];
-    
-    autoTable(doc, {
-      startY: 130,
-      head: [['Description', 'Amount']],
-      body: financialData,
-      theme: 'grid',
-      headStyles: { fillColor: [1, 124, 67] }
-    });
-    
-    // Compensation Summary
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Compensation Summary', 14, 185);
-    
-    autoTable(doc, {
-      startY: 190,
-      head: [['Component', 'Amount']],
-      body: [
-        ['Total Compensation', `₹${result?.totalCompensation?.toLocaleString()}`],
-        ['Interest Rate', `${result?.interestRate}%`],
-        ['Period (Days)', formData.days.toString()],
-        ['Interest Amount', `₹${result?.interestAmount?.toLocaleString()}`],
-        ['TOTAL WITH INTEREST', `₹${result?.totalWithInterest?.toLocaleString()}`]
-      ],
-      theme: 'grid',
-      headStyles: { fillColor: [1, 124, 67] },
-      didParseCell: (data) => {
-        if (data.row.index === 4) {
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.textColor = [1, 124, 67];
-        }
-      }
-    });
-    
-    // Footer
-    doc.setFontSize(8);
-    doc.setTextColor(128);
-    doc.text('Generated by Ruswaps - MVA-EC Claims Calculator', 105, 280, { align: 'center' });
-    doc.text('This is a calculation aid. Actual compensation may vary based on court judgment.', 105, 285, { align: 'center' });
-    
-    doc.save('MVA_Claims_Report.pdf');
+    if (!result) return;
+    window.open(`/api/calculations/pdf?id=${Date.now()}`, '_blank');
   };
 
   const resetForm = () => {
@@ -260,14 +202,36 @@ export default function MVAClaimsCalculator() {
       disabilityPercentage: 0,
       otherExpenses: 0,
       interestRate: 7,
-      days: 365
+      days: 365,
     });
     setResult(null);
+    setError(null);
+    setErrors({});
+    setSaveStatus('idle');
   };
+
+  const inputClass = (field: string) => {
+    const base = 'w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary transition';
+    return errors[field] ? `${base} border-red-500` : `${base} border-gray-300`;
+  };
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white rounded-xl p-8 max-w-md w-full mx-4 shadow-lg">
+          <div className="flex items-center gap-3 text-red-600 mb-4">
+            <AlertCircle size={24} />
+            <h2 className="text-xl font-bold">Authentication Error</h2>
+          </div>
+          <p className="text-gray-600 mb-4">{authError}</p>
+          <p className="text-sm text-gray-500">Redirecting to login...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow-sm sticky top-0 z-40">
         <div className="max-w-5xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -281,52 +245,39 @@ export default function MVAClaimsCalculator() {
               </div>
             </div>
             {result && (
-              <button
-                onClick={generatePDF}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition"
-              >
-                <Download size={18} />
-                <span>Download PDF</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <SavingIndicator status={saveStatus} />
+                <button
+                  onClick={generatePDF}
+                  className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition"
+                >
+                  <FileText size={18} />
+                  <span>Download Report</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
       </header>
 
-      {/* Progress Steps */}
       <div className="bg-white border-b">
         <div className="max-w-5xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-center gap-4">
-            {[1, 2, 3].map((s) => (
-              <div key={s} className="flex items-center">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${
-                  s < step ? 'bg-primary text-white' : s === step ? 'bg-primary text-white ring-4 ring-primary/20' : 'bg-gray-200 text-gray-500'
-                }`}>
-                  {s < step ? '✓' : s}
-                </div>
-                <span className={`ml-2 font-medium ${s <= step ? 'text-primary' : 'text-gray-400'}`}>
-                  {s === 1 ? 'Claim Type' : s === 2 ? 'Details' : 'Result'}
-                </span>
-                {s < 3 && <div className={`w-20 h-1 mx-4 ${s < step ? 'bg-primary' : 'bg-gray-200'}`}></div>}
-              </div>
-            ))}
-          </div>
+          <ProgressSteps current={step - 1} total={3} />
         </div>
       </div>
 
       <main className="max-w-5xl mx-auto px-4 py-8">
-        {/* Step 1: Claim Type Selection */}
         {step === 1 && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
               <h2 className="text-2xl font-bold text-gray-900 mb-6">Select Claim Type</h2>
-              
+
               <div className="grid md:grid-cols-2 gap-6">
                 <button
                   onClick={() => setClaimType('fatal')}
                   className={`p-6 rounded-xl border-2 transition ${
-                    claimType === 'fatal' 
-                      ? 'border-primary bg-primary/5' 
+                    claimType === 'fatal'
+                      ? 'border-primary bg-primary/5'
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
@@ -335,31 +286,21 @@ export default function MVAClaimsCalculator() {
                   </div>
                   <h3 className="text-xl font-bold text-gray-900 mb-2">Fatal / Death Claim</h3>
                   <p className="text-gray-600">For claims involving death of the victim</p>
-                  <ul className="mt-4 text-sm text-gray-500 space-y-1">
-                    <li>• Loss of dependency calculation</li>
-                    <li>• Funeral expenses</li>
-                    <li>• For married, bachelor, minor</li>
-                  </ul>
                 </button>
 
                 <button
                   onClick={() => setClaimType('non-fatal')}
                   className={`p-6 rounded-xl border-2 transition ${
-                    claimType === 'non-fatal' 
-                      ? 'border-primary bg-primary/5' 
+                    claimType === 'non-fatal'
+                      ? 'border-primary bg-primary/5'
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
                   <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mb-4">
-                    <Briefcase className="text-orange-600" size={32} />
+                    <User className="text-orange-600" size={32} />
                   </div>
                   <h3 className="text-xl font-bold text-gray-900 mb-2">Non-Fatal / Injury Claim</h3>
                   <p className="text-gray-600">For claims involving injuries</p>
-                  <ul className="mt-4 text-sm text-gray-500 space-y-1">
-                    <li>• Temporary or permanent disability</li>
-                    <li>• Loss of earning capacity</li>
-                    <li>• Based on disability percentage</li>
-                  </ul>
                 </button>
               </div>
             </div>
@@ -368,13 +309,13 @@ export default function MVAClaimsCalculator() {
               <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
                 <h3 className="text-xl font-bold text-gray-900 mb-6">Select Claimant Status</h3>
                 <div className="grid md:grid-cols-3 gap-4">
-                  {['married', 'bachelor', 'minor'].map((type) => (
+                  {(['married', 'bachelor', 'minor'] as const).map((type) => (
                     <button
                       key={type}
                       onClick={() => setClaimantType(type)}
                       className={`p-4 rounded-xl border-2 capitalize transition ${
-                        claimantType === type 
-                          ? 'border-primary bg-primary/5 text-primary' 
+                        claimantType === type
+                          ? 'border-primary bg-primary/5 text-primary'
                           : 'border-gray-200 hover:border-gray-300 text-gray-700'
                       }`}
                     >
@@ -395,20 +336,19 @@ export default function MVAClaimsCalculator() {
           </div>
         )}
 
-        {/* Step 2: Enter Details */}
         {step === 2 && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
               <h2 className="text-2xl font-bold text-gray-900 mb-6">Enter Case Details</h2>
-              
+
               <div className="grid md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Case Number</label>
                   <input
                     type="text"
                     value={formData.caseNo}
-                    onChange={(e) => setFormData({...formData, caseNo: e.target.value})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, caseNo: e.target.value })}
+                    className={inputClass('caseNo')}
                     placeholder="e.g., MVC 1234/2024"
                   />
                 </div>
@@ -418,8 +358,8 @@ export default function MVAClaimsCalculator() {
                   <input
                     type="number"
                     value={formData.caseYear}
-                    onChange={(e) => setFormData({...formData, caseYear: parseInt(e.target.value)})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, caseYear: parseInt(e.target.value) || new Date().getFullYear() })}
+                    className={inputClass('caseYear')}
                   />
                 </div>
 
@@ -428,8 +368,8 @@ export default function MVAClaimsCalculator() {
                   <input
                     type="text"
                     value={formData.courtName}
-                    onChange={(e) => setFormData({...formData, courtName: e.target.value})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, courtName: e.target.value })}
+                    className={inputClass('courtName')}
                     placeholder="e.g., City Civil Court, Tenali"
                   />
                 </div>
@@ -441,24 +381,24 @@ export default function MVAClaimsCalculator() {
                   <input
                     type="number"
                     value={formData.age}
-                    onChange={(e) => setFormData({...formData, age: parseInt(e.target.value)})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, age: Math.max(0, Math.min(120, parseInt(e.target.value) || 0)) })}
+                    className={inputClass('age')}
                     min="0"
-                    max="100"
+                    max="120"
                   />
+                  {errors.age && <p className="text-red-500 text-sm mt-1">{errors.age}</p>}
                   <p className="text-xs text-gray-500 mt-1">Age Factor: {getAgeFactor(formData.age)}</p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Monthly Income (₹)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Monthly Income (Rs.)</label>
                   <input
                     type="number"
                     value={formData.income}
-                    onChange={(e) => setFormData({...formData, income: parseInt(e.target.value)})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, income: Math.max(0, parseInt(e.target.value) || 0) })}
+                    className={inputClass('income')}
                   />
+                  {errors.income && <p className="text-red-500 text-sm mt-1">{errors.income}</p>}
                 </div>
 
                 {claimType === 'fatal' && (
@@ -467,36 +407,36 @@ export default function MVAClaimsCalculator() {
                     <input
                       type="number"
                       value={formData.dependents}
-                      onChange={(e) => setFormData({...formData, dependents: parseInt(e.target.value)})}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      onChange={(e) => setFormData({ ...formData, dependents: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className={inputClass('dependents')}
                       min="0"
                     />
+                    {errors.dependents && <p className="text-red-500 text-sm mt-1">{errors.dependents}</p>}
                   </div>
                 )}
 
                 {claimType === 'non-fatal' && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Disability Percentage (%)
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Disability Percentage (%)</label>
                     <input
                       type="number"
                       value={formData.disabilityPercentage}
-                      onChange={(e) => setFormData({...formData, disabilityPercentage: parseInt(e.target.value)})}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      onChange={(e) => setFormData({ ...formData, disabilityPercentage: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })}
+                      className={inputClass('disabilityPercentage')}
                       min="0"
                       max="100"
                     />
+                    {errors.disabilityPercentage && <p className="text-red-500 text-sm mt-1">{errors.disabilityPercentage}</p>}
                   </div>
                 )}
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Other Expenses (₹)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Other Expenses (Rs.)</label>
                   <input
                     type="number"
                     value={formData.otherExpenses}
-                    onChange={(e) => setFormData({...formData, otherExpenses: parseInt(e.target.value) || 0})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, otherExpenses: Math.max(0, parseInt(e.target.value) || 0) })}
+                    className={inputClass('otherExpenses')}
                     min="0"
                   />
                 </div>
@@ -506,10 +446,11 @@ export default function MVAClaimsCalculator() {
                   <input
                     type="number"
                     value={formData.interestRate}
-                    onChange={(e) => setFormData({...formData, interestRate: parseFloat(e.target.value)})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, interestRate: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) })}
+                    className={inputClass('interestRate')}
                     step="0.1"
                   />
+                  {errors.interestRate && <p className="text-red-500 text-sm mt-1">{errors.interestRate}</p>}
                 </div>
 
                 <div>
@@ -517,12 +458,20 @@ export default function MVAClaimsCalculator() {
                   <input
                     type="number"
                     value={formData.days}
-                    onChange={(e) => setFormData({...formData, days: parseInt(e.target.value)})}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, days: Math.max(1, parseInt(e.target.value) || 1) })}
+                    className={inputClass('days')}
                   />
+                  {errors.days && <p className="text-red-500 text-sm mt-1">{errors.days}</p>}
                 </div>
               </div>
             </div>
+
+            {error && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3">
+                <AlertCircle className="text-yellow-600 flex-shrink-0 mt-0.5" size={20} />
+                <p className="text-sm text-yellow-800">{error}</p>
+              </div>
+            )}
 
             <div className="flex gap-4">
               <button
@@ -533,21 +482,33 @@ export default function MVAClaimsCalculator() {
               </button>
               <button
                 onClick={calculateCompensation}
-                className="flex-1 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2"
+                disabled={isLoading}
+                className="flex-1 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <Calculator size={20} />
-                Calculate Compensation
+                {isLoading ? (
+                  <>
+                    <Loader2 size={20} className="animate-spin" />
+                    Calculating...
+                  </>
+                ) : (
+                  <>
+                    <Calculator size={20} />
+                    Calculate Compensation
+                  </>
+                )}
               </button>
             </div>
           </div>
         )}
 
-        {/* Step 3: Results */}
         {step === 3 && result && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">Calculation Results</h2>
+                <div className="flex items-center gap-3">
+                  <CheckCircle className="text-green-600" size={28} />
+                  <h2 className="text-2xl font-bold text-gray-900">Calculation Results</h2>
+                </div>
                 <button
                   onClick={resetForm}
                   className="flex items-center gap-2 text-gray-600 hover:text-primary"
@@ -557,23 +518,21 @@ export default function MVAClaimsCalculator() {
                 </button>
               </div>
 
-              {/* Summary Cards */}
               <div className="grid md:grid-cols-3 gap-4 mb-8">
                 <div className="bg-gradient-to-br from-primary to-secondary rounded-xl p-6 text-white">
                   <p className="text-sm opacity-80">Total Compensation</p>
-                  <p className="text-3xl font-bold mt-1">₹{result.totalCompensation.toLocaleString()}</p>
+                  <p className="text-3xl font-bold mt-1">Rs.{result.totalCompensation.toLocaleString()}</p>
                 </div>
                 <div className="bg-gray-100 rounded-xl p-6">
                   <p className="text-sm text-gray-600">Interest Amount</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">₹{result.interestAmount.toLocaleString()}</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">Rs.{result.interestAmount.toLocaleString()}</p>
                 </div>
                 <div className="bg-green-100 rounded-xl p-6">
                   <p className="text-sm text-green-700">Total with Interest</p>
-                  <p className="text-3xl font-bold text-green-700 mt-1">₹{result.totalWithInterest.toLocaleString()}</p>
+                  <p className="text-3xl font-bold text-green-700 mt-1">Rs.{result.totalWithInterest.toLocaleString()}</p>
                 </div>
               </div>
 
-              {/* Detailed Breakdown */}
               <div className="border rounded-xl overflow-hidden">
                 <div className="bg-gray-50 px-6 py-4 border-b">
                   <h3 className="font-semibold text-gray-900">Detailed Breakdown</h3>
@@ -582,60 +541,39 @@ export default function MVAClaimsCalculator() {
                   {claimType === 'fatal' ? (
                     <>
                       <div className="flex justify-between items-center py-3 border-b border-gray-100">
-                        <span className="text-gray-600">Loss of Dependency (50% of Income × 12 × Age Factor)</span>
-                        <span className="font-semibold">₹{result.lossOfDependency?.toLocaleString()}</span>
+                        <span className="text-gray-600">Loss of Dependency (50%)</span>
+                        <span className="font-semibold">Rs.{result.lossOfDependency?.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-gray-100">
                         <span className="text-gray-600">Funeral Expenses</span>
-                        <span className="font-semibold">₹{result.funeralExpenses?.toLocaleString()}</span>
+                        <span className="font-semibold">Rs.{result.funeralExpenses?.toLocaleString()}</span>
                       </div>
                     </>
                   ) : (
                     <>
                       <div className="flex justify-between items-center py-3 border-b border-gray-100">
-                        <span className="text-gray-600">Loss of Earning Capacity (60% × Disability %)</span>
-                        <span className="font-semibold">₹{result.lossOfEarningCapacity?.toLocaleString()}</span>
+                        <span className="text-gray-600">Loss of Earning Capacity (60%)</span>
+                        <span className="font-semibold">Rs.{result.lossOfEarningCapacity?.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between items-center py-3 border-b border-gray-100">
                         <span className="text-gray-600">Disability Percentage</span>
-                        <span className="font-semibold">{result.disabilityPercentage}%</span>
+                        <span className="font-semibold">{formData.disabilityPercentage}%</span>
                       </div>
                     </>
                   )}
                   <div className="flex justify-between items-center py-3 border-b border-gray-100">
                     <span className="text-gray-600">Other Expenses</span>
-                    <span className="font-semibold">₹{result.otherExpenses?.toLocaleString()}</span>
+                    <span className="font-semibold">Rs.{result.otherExpenses?.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between items-center py-3 border-b border-gray-100">
                     <span className="text-gray-600">Interest Rate</span>
                     <span className="font-semibold">{result.interestRate}%</span>
                   </div>
-                  <div className="flex justify-between items-center py-3 border-b border-gray-100">
-                    <span className="text-gray-600">Period (Days)</span>
-                    <span className="font-semibold">{formData.days}</span>
-                  </div>
                   <div className="flex justify-between items-center py-3 bg-green-50 -mx-6 px-6 rounded-lg">
                     <span className="font-bold text-gray-900">Total Interest</span>
-                    <span className="font-bold text-green-700">₹{result.interestAmount.toLocaleString()}</span>
+                    <span className="font-bold text-green-700">Rs.{result.interestAmount.toLocaleString()}</span>
                   </div>
                 </div>
-              </div>
-
-              {/* Formula */}
-              <div className="mt-6 bg-blue-50 rounded-xl p-6">
-                <h4 className="font-semibold text-gray-900 mb-2">Calculation Formula</h4>
-                <p className="text-sm text-gray-600 font-mono">
-                  {claimType === 'fatal' 
-                    ? 'Loss of Dependency = (Monthly Income × 50%) × 12 months × Age Factor'
-                    : 'Loss of Earning = (Monthly Income × 60%) × Disability% × 12 months × Age Factor'
-                  }
-                </p>
-                <p className="text-sm text-gray-600 font-mono mt-2">
-                  Total = Compensation + Other Expenses
-                </p>
-                <p className="text-sm text-gray-600 font-mono">
-                  Interest = (Total × Interest Rate%) × (Days / 365)
-                </p>
               </div>
             </div>
 
@@ -651,7 +589,7 @@ export default function MVAClaimsCalculator() {
                 className="flex-1 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2"
               >
                 <Download size={20} />
-                Download PDF Report
+                Download Report
               </button>
             </div>
           </div>

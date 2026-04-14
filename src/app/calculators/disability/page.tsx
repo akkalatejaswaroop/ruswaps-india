@@ -1,169 +1,264 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { z } from 'zod';
 import {
   ArrowLeft,
   Scale,
-  ChevronRight,
-  RefreshCw
+  RefreshCw,
+  AlertCircle,
+  Loader2,
+  CheckCircle,
 } from 'lucide-react';
+import { calculateDisability, DisabilityInput, DisabilityOutput } from '@/lib/calculations';
+import { SavingIndicator } from '@/lib/ui';
 
+type CalculatorType = 'locomotor' | 'amputation' | 'ptd';
+
+interface LocomotorData {
+  extremityType: 'upper' | 'lower' | 'spine';
+  subType: string;
+  impairment: number;
+}
+
+interface AmputationData {
+  type: 'upper_limb' | 'lower_limb';
+  level: string;
+  side: 'right' | 'left' | 'both';
+}
+
+interface PTDData {
+  type: 'total' | 'partial';
+  disability: number;
+}
+
+interface FormErrors {
+  [key: string]: string | undefined;
+}
+
+const locomotorSchema = z.object({
+  impairment: z.number().min(0, 'Impairment must be at least 0').max(100, 'Cannot exceed 100'),
+});
+
+const ptdSchema = z.object({
+  disability: z.number().min(0, 'Disability must be at least 0').max(100, 'Cannot exceed 100'),
+});
 
 export default function DisabilityCalculator() {
   const router = useRouter();
-  const [calculatorType, setCalculatorType] = useState('locomotor');
-  const [result, setResult] = useState(null);
-  const [saving, setSaving] = useState(false);
+  const [calculatorType, setCalculatorType] = useState<CalculatorType>('locomotor');
+  const [result, setResult] = useState<DisabilityOutput | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const [locomotorData, setLocomotorData] = useState({
+  const [locomotorData, setLocomotorData] = useState<LocomotorData>({
     extremityType: 'upper',
     subType: 'shoulder',
-    impairment: 0
+    impairment: 0,
   });
 
-  const [amputationData, setAmputationData] = useState({
+  const [amputationData, setAmputationData] = useState<AmputationData>({
     type: 'upper_limb',
-    level: 'below_elbow',
-    side: 'right'
+    level: 'shoulder_disarticulation',
+    side: 'right',
   });
 
-  const [ptdData, setPtdData] = useState({
+  const [ptdData, setPtdData] = useState<PTDData>({
     type: 'total',
-    nature: 'permanent',
-    disability: 0
+    disability: 0,
   });
 
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
+  const checkAuth = useCallback(async () => {
+    setAuthError(null);
+    try {
+      const res = await fetch('/api/user/profile', {
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          router.push('/login');
+          return false;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Network error';
+      setAuthError(`Authentication check failed: ${message}`);
       router.push('/login');
+      return false;
     }
   }, [router]);
 
-  // Upper Extremity Reference Values (WHO Standards)
-  const upperExtremityValues = {
-    shoulder: { amputation: 60, limitation: 30, fusion: 40 },
-    elbow: { amputation: 55, limitation: 25, fusion: 35 },
-    wrist: { amputation: 50, limitation: 20, fusion: 30 },
-    fingers: { amputation: 40, limitation: 15, fusion: 25 },
-    thumb: { amputation: 25, limitation: 10, fusion: 15 }
-  };
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
 
-  // Lower Extremity Reference Values (WHO Standards)
-  const lowerExtremityValues = {
-    hip: { amputation: 60, limitation: 35, fusion: 45 },
-    knee: { amputation: 50, limitation: 30, fusion: 40 },
-    ankle: { amputation: 40, limitation: 20, fusion: 30 },
-    foot: { amputation: 35, limitation: 15, fusion: 25 },
-    toes: { amputation: 10, limitation: 5, fusion: 8 }
-  };
-
-  // Spine Reference Values
-  const spineValues = {
-    cervical: { total: 60, partial: 25 },
-    dorsal: { total: 40, partial: 20 },
-    lumbar: { total: 50, partial: 25 }
-  };
-
-  // Amputation percentages by level
-  const amputationPercentages = {
-    upper_limb: {
-      shoulder_disarticulation: 100,
-      above_elbow: 80,
-      below_elbow: 70,
-      wrist_disarticulation: 60,
-      hand: 55,
-      fingers_partial: 20,
-      thumb: 15
-    },
-    lower_limb: {
-      hip_disarticulation: 100,
-      above_knee: 80,
-      below_knee: 65,
-      ankle_disarticulation: 40,
-      foot: 35,
-      toes_partial: 10
+  const validateForm = (): boolean => {
+    try {
+      if (calculatorType === 'locomotor') {
+        locomotorSchema.parse({ impairment: locomotorData.impairment });
+      } else if (calculatorType === 'ptd') {
+        ptdSchema.parse({ disability: ptdData.disability });
+      }
+      setErrors({});
+      return true;
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        const newErrors: FormErrors = {};
+        const zodErrors = err as z.ZodError<Record<string, unknown>>;
+        zodErrors.issues.forEach((issue) => {
+          const field = issue.path[0];
+          if (field) {
+            newErrors[field as string] = issue.message;
+          }
+        });
+        setErrors(newErrors);
+      }
+      return false;
     }
   };
 
-  const calculateLocomotor = () => {
-    let percentage = 0;
-    let description = '';
-    let referenceValue = 0;
+  const calculateResult = async () => {
+    setError(null);
 
-    if (locomotorData.extremityType === 'upper') {
-      const values = upperExtremityValues[locomotorData.subType] || { amputation: 60 };
-      referenceValue = values.amputation;
-      percentage = Math.round((locomotorData.impairment / 100) * referenceValue);
-      description = `Upper Extremity - ${locomotorData.subType.charAt(0).toUpperCase() + locomotorData.subType.slice(1)}`;
-    } else if (locomotorData.extremityType === 'lower') {
-      const values = lowerExtremityValues[locomotorData.subType] || { amputation: 50 };
-      referenceValue = values.amputation;
-      percentage = Math.round((locomotorData.impairment / 100) * referenceValue);
-      description = `Lower Extremity - ${locomotorData.subType.charAt(0).toUpperCase() + locomotorData.subType.slice(1)}`;
-    } else {
-      const values = spineValues[locomotorData.subType] || { total: 50 };
-      referenceValue = values.total;
-      percentage = Math.round((locomotorData.impairment / 100) * referenceValue);
-      description = `Spine - ${locomotorData.subType.charAt(0).toUpperCase() + locomotorData.subType.slice(1)}`;
+    if (!validateForm()) {
+      return;
     }
 
-    setResult({
-      type: 'Locomotor Disability',
-      description,
-      impairment: locomotorData.impairment,
-      referenceValue,
-      percentage,
-      wholeBodyDisability: Math.round(percentage * 0.7)
-    });
+    setIsLoading(true);
+    setSaveStatus('saving');
+
+    let calculationResult: DisabilityOutput;
+
+    switch (calculatorType) {
+      case 'locomotor': {
+        const input: DisabilityInput = {
+          type: 'locomotor',
+          extremityType: locomotorData.extremityType,
+          subType: locomotorData.subType,
+          impairment: locomotorData.impairment,
+        };
+        calculationResult = calculateDisability(input);
+        calculationResult.description = `${locomotorData.extremityType.charAt(0).toUpperCase() + locomotorData.extremityType.slice(1)} Extremity - ${locomotorData.subType.charAt(0).toUpperCase() + locomotorData.subType.slice(1)}`;
+        calculationResult.regionalDisability = locomotorData.impairment;
+        break;
+      }
+      case 'amputation': {
+        const input: DisabilityInput = {
+          type: 'amputation',
+          side: amputationData.side === 'both' ? 'both' : 'single',
+          level: amputationData.level,
+        };
+        calculationResult = calculateDisability(input);
+        calculationResult.description = `Amputation - ${amputationData.type.replace('_', ' ').toUpperCase()}`;
+        break;
+      }
+      case 'ptd': {
+        const input: DisabilityInput = {
+          type: ptdData.type === 'total' ? 'ptd' : 'ppd',
+          percentage: ptdData.disability,
+          side: 'single',
+        };
+        calculationResult = calculateDisability(input);
+        calculationResult.description = ptdData.type === 'total' ? 'Permanent Total Disability' : 'Permanent Partial Disability';
+        break;
+      }
+      default:
+        setIsLoading(false);
+        return;
+    }
+
+    setResult(calculationResult);
+    setIsLoading(false);
+
+    try {
+      const res = await fetch(`/api/calculations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          type: 'disability',
+          data: {
+            type: calculatorType,
+            percentage: calculationResult.regionalDisability,
+            side: calculationResult.side,
+          },
+        }),
+      });
+
+      const responseData = await res.json();
+
+      if (!res.ok || !responseData.success) {
+        setSaveStatus('error');
+      } else {
+        setSaveStatus('saved');
+      }
+    } catch (err) {
+      console.error('Failed to save calculation to server:', err);
+      setSaveStatus('error');
+      setError('Calculation completed but could not save to server.');
+    }
   };
 
-  const calculateAmputation = () => {
-    const percentages = amputationPercentages[amputationData.type];
-    const percentage = percentages[amputationData.level] || 0;
-    const sideMultiplier = amputationData.side === 'both' ? 1.5 : 1;
-    const finalPercentage = Math.min(100, Math.round(percentage * sideMultiplier));
-
-    setResult({
-      type: 'Amputation',
-      level: amputationData.level.replace(/_/g, ' '),
-      side: amputationData.side.charAt(0).toUpperCase() + amputationData.side.slice(1),
-      percentage: finalPercentage,
-      wholeBodyDisability: Math.round(finalPercentage * 0.7)
-    });
+  const resetForm = () => {
+    setResult(null);
+    setError(null);
+    setErrors({});
+    setSaveStatus('idle');
+    setLocomotorData({ extremityType: 'upper', subType: 'shoulder', impairment: 0 });
+    setAmputationData({ type: 'upper_limb', level: 'shoulder_disarticulation', side: 'right' });
+    setPtdData({ type: 'total', disability: 0 });
   };
 
-  const calculatePTD = () => {
-    const percentage = ptdData.disability;
-    setResult({
-      type: ptdData.type === 'total' ? 'Permanent Total Disability' : 'Permanent Partial Disability',
-      percentage,
-      wholeBodyDisability: Math.round(percentage * 0.7)
-    });
-  };
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white rounded-xl p-8 max-w-md w-full mx-4 shadow-lg">
+          <div className="flex items-center gap-3 text-red-600 mb-4">
+            <AlertCircle size={24} />
+            <h2 className="text-xl font-bold">Authentication Error</h2>
+          </div>
+          <p className="text-gray-600 mb-4">{authError}</p>
+          <p className="text-sm text-gray-500">Redirecting to login...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm sticky top-0 z-40">
         <div className="max-w-5xl mx-auto px-4 py-4">
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard" className="p-2 text-gray-600 hover:text-primary">
-              <ArrowLeft size={24} />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">Disability Calculator</h1>
-              <p className="text-sm text-gray-500">Based on WHO Guidelines</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <Link href="/dashboard" className="p-2 text-gray-600 hover:text-primary">
+                <ArrowLeft size={24} />
+              </Link>
+              <div>
+                <h1 className="text-xl font-bold text-gray-900">Disability Calculator</h1>
+                <p className="text-sm text-gray-500">Based on WHO Guidelines</p>
+              </div>
             </div>
+            {result && (
+              <div className="flex items-center gap-2">
+                <SavingIndicator status={saveStatus} />
+              </div>
+            )}
           </div>
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-8">
-        {/* Calculator Type Selection */}
         <div className="grid md:grid-cols-3 gap-4 mb-8">
           <button
-            onClick={() => { setCalculatorType('locomotor'); setResult(null); }}
+            onClick={() => { setCalculatorType('locomotor'); setResult(null); setErrors({}); }}
             className={`p-6 rounded-xl border-2 transition ${calculatorType === 'locomotor' ? 'border-primary bg-primary/5' : 'border-gray-200'}`}
           >
             <Scale className="w-12 h-12 mx-auto mb-3 text-primary" />
@@ -171,7 +266,7 @@ export default function DisabilityCalculator() {
             <p className="text-sm text-gray-500 mt-1">Upper/Lower Extremity, Spine</p>
           </button>
           <button
-            onClick={() => { setCalculatorType('amputation'); setResult(null); }}
+            onClick={() => { setCalculatorType('amputation'); setResult(null); setErrors({}); }}
             className={`p-6 rounded-xl border-2 transition ${calculatorType === 'amputation' ? 'border-primary bg-primary/5' : 'border-gray-200'}`}
           >
             <Scale className="w-12 h-12 mx-auto mb-3 text-secondary" />
@@ -179,7 +274,7 @@ export default function DisabilityCalculator() {
             <p className="text-sm text-gray-500 mt-1">Upper/Lower Limb</p>
           </button>
           <button
-            onClick={() => { setCalculatorType('ptd'); setResult(null); }}
+            onClick={() => { setCalculatorType('ptd'); setResult(null); setErrors({}); }}
             className={`p-6 rounded-xl border-2 transition ${calculatorType === 'ptd' ? 'border-primary bg-primary/5' : 'border-gray-200'}`}
           >
             <Scale className="w-12 h-12 mx-auto mb-3 text-primary" />
@@ -188,7 +283,6 @@ export default function DisabilityCalculator() {
           </button>
         </div>
 
-        {/* Locomotor Disability Calculator */}
         {calculatorType === 'locomotor' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
@@ -257,18 +351,29 @@ export default function DisabilityCalculator() {
                   <div className="flex justify-between text-xs text-gray-500 mt-1">
                     <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
                   </div>
+                  {errors.impairment && <p className="text-red-500 text-sm mt-1">{errors.impairment}</p>}
                 </div>
               </div>
 
-              <button onClick={calculateLocomotor}
-                className="w-full mt-6 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold">
-                Calculate Disability
+              {error && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3 mt-6">
+                  <AlertCircle className="text-yellow-600 flex-shrink-0 mt-0.5" size={20} />
+                  <p className="text-sm text-yellow-800">{error}</p>
+                </div>
+              )}
+
+              <button onClick={calculateResult} disabled={isLoading}
+                className="w-full mt-6 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+                {isLoading ? (
+                  <><Loader2 size={20} className="animate-spin" /> Calculating...</>
+                ) : (
+                  <><Scale size={20} /> Calculate Disability</>
+                )}
               </button>
             </div>
           </div>
         )}
 
-        {/* Amputation Calculator */}
         {calculatorType === 'amputation' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
@@ -297,7 +402,7 @@ export default function DisabilityCalculator() {
                         { key: 'shoulder_disarticulation', label: 'Shoulder' },
                         { key: 'above_elbow', label: 'Above Elbow' },
                         { key: 'below_elbow', label: 'Below Elbow' },
-                        { key: 'wrist_disarticulation', label: 'Wrist' }
+                        { key: 'wrist_disarticulation', label: 'Wrist' },
                       ].map(item => (
                         <button key={item.key} onClick={() => setAmputationData({...amputationData, level: item.key})}
                           className={`p-3 rounded-lg text-sm ${amputationData.level === item.key ? 'bg-primary text-white' : 'bg-gray-100'}`}>
@@ -312,7 +417,7 @@ export default function DisabilityCalculator() {
                         { key: 'hip_disarticulation', label: 'Hip' },
                         { key: 'above_knee', label: 'Above Knee' },
                         { key: 'below_knee', label: 'Below Knee' },
-                        { key: 'ankle_disarticulation', label: 'Ankle' }
+                        { key: 'ankle_disarticulation', label: 'Ankle' },
                       ].map(item => (
                         <button key={item.key} onClick={() => setAmputationData({...amputationData, level: item.key})}
                           className={`p-3 rounded-lg text-sm ${amputationData.level === item.key ? 'bg-primary text-white' : 'bg-gray-100'}`}>
@@ -342,15 +447,25 @@ export default function DisabilityCalculator() {
                 </div>
               </div>
 
-              <button onClick={calculateAmputation}
-                className="w-full mt-6 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold">
-                Calculate Disability
+              {error && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3 mt-6">
+                  <AlertCircle className="text-yellow-600 flex-shrink-0 mt-0.5" size={20} />
+                  <p className="text-sm text-yellow-800">{error}</p>
+                </div>
+              )}
+
+              <button onClick={calculateResult} disabled={isLoading}
+                className="w-full mt-6 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+                {isLoading ? (
+                  <><Loader2 size={20} className="animate-spin" /> Calculating...</>
+                ) : (
+                  <><Scale size={20} /> Calculate Disability</>
+                )}
               </button>
             </div>
           </div>
         )}
 
-        {/* PTD/PPD Calculator */}
         {calculatorType === 'ptd' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
@@ -381,23 +496,37 @@ export default function DisabilityCalculator() {
                   <div className="flex justify-between text-xs text-gray-500 mt-1">
                     <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
                   </div>
+                  {errors.disability && <p className="text-red-500 text-sm mt-1">{errors.disability}</p>}
                 </div>
               </div>
 
-              <button onClick={calculatePTD}
-                className="w-full mt-6 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold">
-                Calculate Disability
+              {error && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-start gap-3 mt-6">
+                  <AlertCircle className="text-yellow-600 flex-shrink-0 mt-0.5" size={20} />
+                  <p className="text-sm text-yellow-800">{error}</p>
+                </div>
+              )}
+
+              <button onClick={calculateResult} disabled={isLoading}
+                className="w-full mt-6 py-4 bg-gradient-to-r from-primary to-secondary text-white rounded-xl font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+                {isLoading ? (
+                  <><Loader2 size={20} className="animate-spin" /> Calculating...</>
+                ) : (
+                  <><Scale size={20} /> Calculate Disability</>
+                )}
               </button>
             </div>
           </div>
         )}
 
-        {/* Results */}
         {result && (
           <div className="mt-6 bg-white rounded-2xl shadow-sm p-8 border border-gray-100">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900">Assessment Result</h2>
-              <button onClick={() => setResult(null)} className="flex items-center gap-2 text-gray-600 hover:text-primary">
+              <div className="flex items-center gap-3">
+                <CheckCircle className="text-green-600" size={28} />
+                <h2 className="text-xl font-bold text-gray-900">Assessment Result</h2>
+              </div>
+              <button onClick={resetForm} className="flex items-center gap-2 text-gray-600 hover:text-primary">
                 <RefreshCw size={18} /> Reset
               </button>
             </div>
@@ -405,7 +534,7 @@ export default function DisabilityCalculator() {
             <div className="grid md:grid-cols-3 gap-4 mb-6">
               <div className="bg-gradient-to-br from-primary to-secondary rounded-xl p-6 text-white text-center">
                 <p className="text-sm opacity-80">Regional Disability</p>
-                <p className="text-4xl font-bold mt-2">{result.percentage}%</p>
+                <p className="text-4xl font-bold mt-2">{result.regionalDisability}%</p>
               </div>
               <div className="bg-gray-100 rounded-xl p-6 text-center">
                 <p className="text-sm text-gray-600">Whole Body Disability</p>
@@ -413,9 +542,15 @@ export default function DisabilityCalculator() {
               </div>
               <div className="bg-blue-100 rounded-xl p-6 text-center">
                 <p className="text-sm text-blue-700">Disability Type</p>
-                <p className="text-xl font-bold text-blue-700 mt-2">{result.type}</p>
+                <p className="text-xl font-bold text-blue-700 mt-2">{result.type.toUpperCase()}</p>
               </div>
             </div>
+
+            {result.description && (
+              <div className="bg-gray-50 rounded-xl p-4 mb-6">
+                <p className="text-center text-gray-700">{result.description}</p>
+              </div>
+            )}
 
             <div className="bg-yellow-50 rounded-xl p-6">
               <h4 className="font-semibold text-gray-900 mb-2">Assessment Notes</h4>

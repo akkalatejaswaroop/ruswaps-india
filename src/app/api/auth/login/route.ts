@@ -2,42 +2,53 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateAccessToken, generateRefreshToken, cookieOptions, refreshCookieOptions } from '@/lib/auth';
 import { comparePassword } from '@/lib/auth-server';
 import { prisma } from '@/lib/prisma';
+import { logger } from '@/lib/logger';
+import { generateCSRFToken, CSRF_COOKIE_NAME } from '@/lib/csrf';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { phone, email, identifier, password } = body;
-    const rawIdentifier = identifier || phone || email;
-    const loginIdentifier = rawIdentifier ? rawIdentifier.trim() : '';
-
-    if (!loginIdentifier || !password) {
+    const { identifier, password } = body;
+    
+    if (!identifier || !password) {
       return NextResponse.json(
         { success: false, message: 'Phone/Email and password are required' },
         { status: 400 }
       );
     }
 
+    const loginIdentifier = identifier.trim();
     const isEmail = loginIdentifier.includes('@');
     const queryIdentifier = isEmail ? loginIdentifier.toLowerCase() : loginIdentifier;
 
-    const user = await prisma.user.findFirst({
-      where: isEmail 
-        ? { email: { equals: queryIdentifier, mode: 'insensitive' } } 
-        : { phone: queryIdentifier },
-      select: {
-        id: true,
-        phone: true,
-        email: true,
-        name: true,
-        password: true,
-        role: true,
-        isSubscribed: true,
-        subscriptionExpiry: true,
-        isActive: true,
-      },
-    });
+    let user;
+    try {
+      user = await prisma.user.findFirst({
+        where: isEmail 
+          ? { email: { equals: queryIdentifier, mode: 'insensitive' } } 
+          : { phone: queryIdentifier },
+        select: {
+          id: true,
+          phone: true,
+          email: true,
+          name: true,
+          password: true,
+          role: true,
+          isSubscribed: true,
+          subscriptionExpiry: true,
+          isActive: true,
+        },
+      });
+    } catch (dbError) {
+      logger.error('Login database error', dbError);
+      return NextResponse.json(
+        { success: false, message: 'An error occurred. Please try again.' },
+        { status: 500 }
+      );
+    }
 
     if (!user || !user.isActive) {
+      await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
       return NextResponse.json(
         { success: false, message: 'Invalid credentials' },
         { status: 401 }
@@ -47,6 +58,7 @@ export async function POST(request: NextRequest) {
     const isValid = await comparePassword(password, user.password);
 
     if (!isValid) {
+      await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
       return NextResponse.json(
         { success: false, message: 'Invalid credentials' },
         { status: 401 }
@@ -54,12 +66,6 @@ export async function POST(request: NextRequest) {
     }
 
     const isSubscribed = user.subscriptionExpiry && new Date(user.subscriptionExpiry) > new Date();
-    let statusCode = 200;
-    if (!isSubscribed && user.subscriptionExpiry) {
-      statusCode = 400;
-    } else if (!isSubscribed) {
-      statusCode = 403;
-    }
 
     const accessToken = await generateAccessToken({
       userId: user.id,
@@ -73,6 +79,10 @@ export async function POST(request: NextRequest) {
       type: 'refresh',
     });
 
+    logger.info('User login', { userId: user.id });
+
+    const csrfToken = generateCSRFToken();
+
     const response = NextResponse.json({
       success: true,
       data: {
@@ -85,20 +95,27 @@ export async function POST(request: NextRequest) {
           isSubscribed,
           subscriptionExpiry: user.subscriptionExpiry,
         },
-        accessToken,
+        csrfToken: csrfToken.token,
       },
-      message: 'Login successful',
-    }, { status: statusCode });
+    });
 
     response.cookies.set('accessToken', accessToken, cookieOptions);
     response.cookies.set('refreshToken', refreshToken, refreshCookieOptions);
 
+    response.cookies.set(CSRF_COOKIE_NAME, csrfToken.secret, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 3600,
+    });
+
     return response;
 
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error', error);
     return NextResponse.json(
-      { success: false, message: 'Internal server error' },
+      { success: false, message: 'An error occurred. Please try again.' },
       { status: 500 }
     );
   }
